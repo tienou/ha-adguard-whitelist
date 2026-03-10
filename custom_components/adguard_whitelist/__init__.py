@@ -1,9 +1,8 @@
 """AdGuard Whitelist — manage allowed sites from Home Assistant."""
 from __future__ import annotations
 
-import json
 import logging
-import uuid
+import shutil
 from pathlib import Path
 
 import voluptuous as vol
@@ -36,108 +35,56 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
 
 CARD_JS = "adguard-whitelist-card.js"
-# Serve directly from integration dir — no copy to www/ needed
-CARD_URL = f"/{DOMAIN}/{CARD_JS}"
-
-_CARD_REGISTERED = False
+LOCAL_CARD_URL = f"/local/{CARD_JS}"
 
 
-async def _register_card(hass: HomeAssistant) -> None:
-    """Serve card JS from integration dir and register as Lovelace resource."""
-    global _CARD_REGISTERED
-    if _CARD_REGISTERED:
+async def _deploy_card(hass: HomeAssistant) -> None:
+    """Copy the JS card to www/ and register it as a Lovelace resource."""
+    # 1. Copy JS to www/
+    src = Path(__file__).parent / "www" / CARD_JS
+    dst_dir = Path(hass.config.path("www"))
+    dst_dir.mkdir(exist_ok=True)
+    dst = dst_dir / CARD_JS
+    try:
+        await hass.async_add_executor_job(shutil.copy2, str(src), str(dst))
+        _LOGGER.debug("AdGuard Whitelist card copied to %s", dst)
+    except Exception:
+        _LOGGER.warning("Could not copy card JS to %s", dst)
         return
 
-    www_dir = str(Path(__file__).parent / "www")
+    # 2. Load JS on every page
+    add_extra_js_url(hass, LOCAL_CARD_URL)
 
-    # Serve the www/ folder at /adguard_whitelist/
-    try:
-        from homeassistant.components.http import StaticPathConfig
-
-        await hass.http.async_register_static_paths(
-            [StaticPathConfig(f"/{DOMAIN}", www_dir, cache_headers=False)]
-        )
-    except (ImportError, AttributeError):
-        hass.http.register_static_path(f"/{DOMAIN}", www_dir, False)
-
-    _LOGGER.info("Card JS served at %s", CARD_URL)
-
-    # Load JS on every HA page
-    add_extra_js_url(hass, CARD_URL)
-
-    # Register in .storage/lovelace_resources (persists across restarts)
-    try:
-        added = await hass.async_add_executor_job(
-            _ensure_lovelace_storage, hass
-        )
-        if added:
-            _LOGGER.info("Lovelace resource written to storage: %s", CARD_URL)
-    except Exception as err:
-        _LOGGER.warning("Could not write Lovelace storage: %s", err)
-
-    # Also try in-memory registration (for current session)
+    # 3. Register as Lovelace resource (so it shows in card picker)
     try:
         resources = hass.data.get("lovelace", {}).get("resources")
         if resources is not None:
             existing = [
                 r for r in resources.async_items()
-                if CARD_JS in r.get("url", "")
+                if LOCAL_CARD_URL in r.get("url", "")
             ]
             if not existing:
                 await resources.async_create_item(
-                    {"res_type": "module", "url": CARD_URL}
+                    {"res_type": "module", "url": LOCAL_CARD_URL}
                 )
-                _LOGGER.info("Lovelace resource registered in memory")
+                _LOGGER.info("Registered AdGuard Whitelist card as Lovelace resource")
+            else:
+                _LOGGER.debug("AdGuard Whitelist card resource already registered")
+        else:
+            _LOGGER.debug("Lovelace resources not available")
     except Exception:
-        _LOGGER.debug("In-memory registration skipped", exc_info=True)
-
-    _CARD_REGISTERED = True
-
-
-def _ensure_lovelace_storage(hass: HomeAssistant) -> bool:
-    """Write card URL directly into .storage/lovelace_resources (sync)."""
-    storage_path = Path(hass.config.path(".storage")) / "lovelace_resources"
-
-    if storage_path.exists():
-        with open(storage_path, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    else:
-        data = {
-            "version": 1,
-            "minor_version": 1,
-            "key": "lovelace_resources",
-            "data": {"items": []},
-        }
-
-    items = data.get("data", {}).get("items", [])
-
-    for item in items:
-        if CARD_JS in item.get("url", ""):
-            return False
-
-    items.append({
-        "id": uuid.uuid4().hex[:12],
-        "type": "module",
-        "url": CARD_URL,
-    })
-    data["data"]["items"] = items
-
-    storage_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(storage_path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2)
-
-    return True
+        _LOGGER.debug("Could not auto-register Lovelace resource", exc_info=True)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
-    """Set up the integration domain."""
+    """Set up AdGuard Whitelist and deploy the custom Lovelace card."""
     hass.data.setdefault(DOMAIN, {})
+    await _deploy_card(hass)
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up AdGuard Whitelist from a config entry."""
-    await _register_card(hass)
     session = async_get_clientsession(hass)
     api = AdGuardHomeAPI(
         url=entry.data[CONF_ADGUARD_URL],
