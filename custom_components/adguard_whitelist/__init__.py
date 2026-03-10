@@ -71,10 +71,25 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     return True
 
 
+async def _async_ensure_lovelace_resource(hass: HomeAssistant) -> None:
+    """Add card JS to Lovelace resources if not already there."""
+    try:
+        resources = hass.data["lovelace"]["resources"]
+        for item in resources.async_items():
+            if LOCAL_CARD_URL in item.get("url", ""):
+                return
+        await resources.async_create_item(
+            {"res_type": "js", "url": LOCAL_CARD_URL}
+        )
+        _LOGGER.info("Lovelace resource auto-registered: %s", LOCAL_CARD_URL)
+    except Exception as err:
+        _LOGGER.warning("Could not auto-register Lovelace resource: %s", err)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up AdGuard Whitelist from a config entry."""
-    # Ensure card is deployed even if async_setup ran before HTTP was ready
     _deploy_card(hass)
+    await _async_ensure_lovelace_resource(hass)
     session = async_get_clientsession(hass)
     api = AdGuardHomeAPI(
         url=entry.data[CONF_ADGUARD_URL],
