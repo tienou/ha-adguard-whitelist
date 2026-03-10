@@ -1,0 +1,33 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connexion AdGuard Home",
+        "description": "Configurez la connexion à votre instance AdGuard Home.",
+        "data": {
+          "adguard_url": "URL AdGuard Home",
+          "adguard_user": "Nom d'utilisateur",
+          "adguard_password": "Mot de passe",
+          "client_ip": "Adresse IP du client"
+        }
+      },
+      "ssh": {
+        "title": "Favoris Firefox (Optionnel)",
+        "description": "Synchroniser les sites autorisés comme favoris Firefox via SSH.",
+        "data": {
+          "ssh_enabled": "Activer la synchro Firefox",
+          "ssh_host": "Hôte SSH",
+          "ssh_port": "Port SSH",
+          "ssh_user": "Utilisateur SSH",
+          "ssh_password": "Mot de passe SSH"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Impossible de se connecter à AdGuard Home. Vérifiez l'URL et les identifiants."
+    },
+    "abort": {
+      "already_configured": "Cette adresse IP est déjà configurée."
+    }
+  }
+}

@@ -1,0 +1,23 @@
+add_site:
+  name: "Ajouter un site"
+  description: "Ajoute un domaine à la liste blanche AdGuard pour l'IP configurée."
+  fields:
+    domain:
+      name: "Domaine"
+      description: "Le nom de domaine à autoriser (ex: lumni.fr)"
+      required: true
+      example: "lumni.fr"
+      selector:
+        text:
+
+remove_site:
+  name: "Supprimer un site"
+  description: "Supprime un domaine de la liste blanche AdGuard pour l'IP configurée."
+  fields:
+    domain:
+      name: "Domaine"
+      description: "Le nom de domaine à retirer (ex: lumni.fr)"
+      required: true
+      example: "lumni.fr"
+      selector:
+        text:
