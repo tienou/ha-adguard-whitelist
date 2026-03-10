@@ -154,21 +154,21 @@ class AdGuardWhitelistOptionsFlow(config_entries.OptionsFlow):
                     CONF_SSH_ENABLED,
                     default=current.get(CONF_SSH_ENABLED, False),
                 ): bool,
-                vol.Optional(
+                vol.Required(
                     CONF_SSH_HOST,
-                    description={"suggested_value": current.get(CONF_SSH_HOST, "")},
+                    default=current.get(CONF_SSH_HOST, ""),
                 ): str,
-                vol.Optional(
+                vol.Required(
                     CONF_SSH_PORT,
-                    description={"suggested_value": current.get(CONF_SSH_PORT, 22)},
+                    default=current.get(CONF_SSH_PORT, 22),
                 ): int,
-                vol.Optional(
+                vol.Required(
                     CONF_SSH_USER,
-                    description={"suggested_value": current.get(CONF_SSH_USER, "")},
+                    default=current.get(CONF_SSH_USER, ""),
                 ): str,
-                vol.Optional(
+                vol.Required(
                     CONF_SSH_PASSWORD,
-                    description={"suggested_value": current.get(CONF_SSH_PASSWORD, "")},
+                    default=current.get(CONF_SSH_PASSWORD, ""),
                 ): str,
             }
         )
