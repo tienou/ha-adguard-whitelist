@@ -223,12 +223,26 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Sync bookmark metadata from Firefox
         await self._sync_bookmarks_from_firefox()
 
+        # Check SSH reachability (already attempted during flush/sync above)
+        ssh_reachable = False
+        if self.ssh_client:
+            try:
+                await self.ssh_client.execute("echo ok")
+                ssh_reachable = True
+            except Exception:
+                ssh_reachable = False
+
+        adguard_reachable = True
         try:
             status = await self.api.get_filtering_status()
         except AdGuardConnectionError as err:
             _LOGGER.warning("Cannot reach AdGuard Home: %s", err)
+            adguard_reachable = False
             if self.data:
-                return dict(self.data)
+                prev = dict(self.data)
+                prev["adguard_reachable"] = False
+                prev["ssh_reachable"] = ssh_reachable
+                return prev
             return {
                 "domains": [],
                 "count": 0,
@@ -237,6 +251,8 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "pending_ssh": self.pending_count,
                 "bookmarked_domains": [],
                 "ssh_enabled": self.ssh_enabled,
+                "adguard_reachable": False,
+                "ssh_reachable": ssh_reachable,
             }
 
         all_rules = status.get("user_rules", [])
@@ -259,4 +275,6 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "pending_ssh": self.pending_count,
             "bookmarked_domains": bookmarked,
             "ssh_enabled": self.ssh_enabled,
+            "adguard_reachable": adguard_reachable,
+            "ssh_reachable": ssh_reachable,
         }

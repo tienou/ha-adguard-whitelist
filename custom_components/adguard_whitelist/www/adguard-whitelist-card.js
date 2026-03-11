@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.0.0";
+const CARD_VERSION = "2.1.0";
 
 /* ── Autocomplete suggestions ────────────────────────────── */
 const DOMAIN_SUGGESTIONS = [
@@ -155,6 +155,16 @@ class AdGuardWhitelistCard extends HTMLElement {
           .aw-header-info { flex: 1; }
           .aw-header-title { font-size: 16px; font-weight: 500; }
           .aw-header-status { font-size: 12px; color: var(--secondary-text-color); }
+          .aw-status-row {
+            display: flex; align-items: center; gap: 10px; margin-top: 2px;
+            font-size: 11px;
+          }
+          .aw-status-dot {
+            display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+            margin-right: 3px; vertical-align: middle;
+          }
+          .aw-status-dot.online { background: var(--success-color, #4caf50); }
+          .aw-status-dot.offline { background: var(--error-color, #f44336); }
           .aw-pending-badge {
             background: var(--warning-color, #ff9800); color: white;
             border-radius: 10px; padding: 2px 8px; font-size: 11px; margin-left: 4px;
@@ -241,10 +251,11 @@ class AdGuardWhitelistCard extends HTMLElement {
               <ha-icon icon="mdi:shield-check"></ha-icon>
             </div>
             <div class="aw-header-info">
-              <div class="aw-header-title">${title}</div>
+              <div class="aw-header-title">${title}${this.config.child_name ? ` — ${this.config.child_name}` : ""}</div>
               <div class="aw-header-status" id="aw-status">
-                AdGuard Home &middot; ${this.config.client_ip}
+                ${this.config.client_ip}
               </div>
+              <div class="aw-status-row" id="aw-status-row"></div>
             </div>
           </div>
 
@@ -550,10 +561,23 @@ class AdGuardWhitelistCard extends HTMLElement {
     if (rulesEl) rulesEl.textContent = totalRules;
 
     // Update status
+    const adguardOk = sensor.attributes.adguard_reachable !== false;
+    const sshOk = sensor.attributes.ssh_reachable || false;
+    const sshEnabled = sensor.attributes.ssh_enabled || false;
+
     const statusEl = this.querySelector("#aw-status");
     if (statusEl) {
-      statusEl.innerHTML = `AdGuard Home &middot; ${this.config.client_ip}` +
+      statusEl.innerHTML = this.config.client_ip +
         (pendingSsh > 0 ? ` <span class="aw-pending-badge">${pendingSsh} synchro en attente</span>` : "");
+    }
+
+    const statusRow = this.querySelector("#aw-status-row");
+    if (statusRow) {
+      let dots = `<span><span class="aw-status-dot ${adguardOk ? "online" : "offline"}"></span>AdGuard</span>`;
+      if (sshEnabled) {
+        dots += `<span><span class="aw-status-dot ${sshOk ? "online" : "offline"}"></span>SSH</span>`;
+      }
+      statusRow.innerHTML = dots;
     }
 
     // Build categories from sensor attributes
@@ -679,6 +703,12 @@ class AdGuardWhitelistCardEditor extends HTMLElement {
             placeholder="192.168.8.50">
         </div>
         <div style="margin-bottom: 12px;">
+          <label style="display:block;margin-bottom:4px;font-weight:500;">Nom de l'enfant (optionnel)</label>
+          <input type="text" id="child_name" value="${this._config.child_name || ""}"
+            style="width:100%;padding:8px;border:1px solid var(--divider-color);border-radius:4px;box-sizing:border-box;"
+            placeholder="Camille">
+        </div>
+        <div style="margin-bottom: 12px;">
           <label style="display:block;margin-bottom:4px;font-weight:500;">Titre (optionnel)</label>
           <input type="text" id="title" value="${this._config.title || ""}"
             style="width:100%;padding:8px;border:1px solid var(--divider-color);border-radius:4px;box-sizing:border-box;"
@@ -695,6 +725,10 @@ class AdGuardWhitelistCardEditor extends HTMLElement {
 
     this.querySelector("#client_ip").addEventListener("input", (e) => {
       this._config = { ...this._config, client_ip: e.target.value };
+      this._dispatch();
+    });
+    this.querySelector("#child_name").addEventListener("input", (e) => {
+      this._config = { ...this._config, child_name: e.target.value };
       this._dispatch();
     });
     this.querySelector("#title").addEventListener("input", (e) => {
