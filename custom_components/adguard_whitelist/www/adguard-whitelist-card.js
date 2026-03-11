@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.4.0";
+const CARD_VERSION = "2.4.1";
 
 /* ── Autocomplete suggestions ────────────────────────────── */
 const DOMAIN_SUGGESTIONS = [
@@ -188,7 +188,9 @@ class AdGuardWhitelistCard extends HTMLElement {
             flex: 1; padding: 8px 12px;
             border: 1px solid var(--divider-color); border-radius: 8px;
             background: var(--card-background-color, var(--ha-card-background));
-            color: var(--primary-text-color); font-size: 14px; outline: none;
+            color: var(--primary-text-color); font-size: 16px; outline: none;
+            touch-action: auto; -webkit-user-select: text; user-select: text;
+            -webkit-appearance: none; appearance: none;
           }
           .aw-add-input:focus { border-color: var(--primary-color); }
           .aw-add-input::placeholder { color: var(--secondary-text-color); }
@@ -240,15 +242,18 @@ class AdGuardWhitelistCard extends HTMLElement {
           }
           .aw-site-link {
             color: var(--primary-text-color); text-decoration: none;
+            cursor: pointer; -webkit-tap-highlight-color: rgba(0,0,0,0.1);
           }
-          .aw-site-link:hover { color: var(--primary-color); text-decoration: underline; }
+          .aw-site-link:hover, .aw-site-link:active { color: var(--primary-color); text-decoration: underline; }
           .aw-ff-icon { color: #ff6611; --mdc-icon-size: 16px; }
           .aw-ff-add {
-            color: var(--disabled-text-color, #bbb);
-            cursor: pointer; opacity: 0.35; transition: all 0.15s;
+            color: var(--disabled-text-color, #999);
+            cursor: pointer; opacity: 0.5; transition: all 0.15s;
             display: inline-flex; align-items: center;
+            -webkit-tap-highlight-color: rgba(0,0,0,0.1);
+            padding: 4px;
           }
-          .aw-ff-add:hover { color: #ff6611; opacity: 1; }
+          .aw-ff-add:hover, .aw-ff-add:active { color: #ff6611; opacity: 1; }
           .aw-site-remove {
             cursor: pointer; color: var(--error-color, #f44336);
             opacity: 0.4; transition: opacity 0.15s; display: flex; align-items: center;
@@ -346,8 +351,14 @@ class AdGuardWhitelistCard extends HTMLElement {
 
     // Prevent blur before click fires
     addBtn.addEventListener("mousedown", (e) => e.preventDefault());
+    addBtn.addEventListener("touchstart", (e) => e.preventDefault(), { passive: false });
     addBtn.addEventListener("click", (e) => {
       e.stopPropagation();
+      this._openAddDialog();
+    });
+    addBtn.addEventListener("touchend", (e) => {
+      e.stopPropagation();
+      e.preventDefault();
       this._openAddDialog();
     });
   }
@@ -672,7 +683,7 @@ class AdGuardWhitelistCard extends HTMLElement {
           ffHtml = `<span class="aw-ff-add" data-bookmark="${d}" title="Créer un raccourci Firefox"><ha-icon icon="mdi:firefox" style="--mdc-icon-size:16px"></ha-icon></span>`;
         }
         html += `<div class="aw-site-item">
-          <span class="aw-site-name">${ffHtml}<a href="https://${d}" target="_blank" rel="noopener" class="aw-site-link">${d}</a></span>
+          <span class="aw-site-name">${ffHtml}<span class="aw-site-link" data-open="${d}">${d}</span></span>
           <div class="aw-site-remove" data-remove="${d}" title="Supprimer">
             <ha-icon icon="mdi:close-circle-outline" style="--mdc-icon-size:18px"></ha-icon>
           </div>
@@ -703,8 +714,18 @@ class AdGuardWhitelistCard extends HTMLElement {
     container.querySelectorAll("[data-bookmark]").forEach((el) => {
       el.addEventListener("click", (e) => {
         e.stopPropagation();
+        e.preventDefault();
         const domain = el.dataset.bookmark;
         this._addBookmark(domain);
+      });
+    });
+
+    // Bind domain links (window.open works better in HA app than <a> tags)
+    container.querySelectorAll("[data-open]").forEach((el) => {
+      el.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        window.open(`https://${el.dataset.open}`, "_blank");
       });
     });
   }
