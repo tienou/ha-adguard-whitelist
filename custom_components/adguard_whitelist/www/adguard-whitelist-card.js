@@ -585,12 +585,23 @@ class AdGuardWhitelistCard extends HTMLElement {
       }
     }
 
+    // Sort categories: Éducation, Programmation first — Autre, CDN last
+    const CAT_ORDER = [
+      "Éducation", "Programmation", "Divertissement", "Communication",
+      "Shopping", "Actualités", "Services publics", "Autre", "CDN / Technique",
+    ];
+    const sortedCats = Object.entries(categories).sort(([a], [b]) => {
+      const ia = CAT_ORDER.indexOf(a);
+      const ib = CAT_ORDER.indexOf(b);
+      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+    });
+
     // Render sites
     const container = this.querySelector("#aw-sites-container");
     if (!container) return;
 
     let html = "";
-    for (const [catName, catDomains] of Object.entries(categories)) {
+    for (const [catName, catDomains] of sortedCats) {
       if (!showCdn && catName === "CDN / Technique") continue;
 
       const icon = CAT_ICONS[catName] || "mdi:web";
