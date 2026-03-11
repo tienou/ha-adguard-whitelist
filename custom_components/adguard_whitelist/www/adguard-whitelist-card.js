@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.3.1";
+const CARD_VERSION = "2.4.0";
 
 /* ── Autocomplete suggestions ────────────────────────────── */
 const DOMAIN_SUGGESTIONS = [
@@ -238,6 +238,10 @@ class AdGuardWhitelistCard extends HTMLElement {
             font-size: 13px; color: var(--primary-text-color);
             display: flex; align-items: center; gap: 4px;
           }
+          .aw-site-link {
+            color: var(--primary-text-color); text-decoration: none;
+          }
+          .aw-site-link:hover { color: var(--primary-color); text-decoration: underline; }
           .aw-ff-icon { color: #ff6611; --mdc-icon-size: 16px; }
           .aw-ff-add {
             color: var(--disabled-text-color, #bbb);
@@ -668,7 +672,7 @@ class AdGuardWhitelistCard extends HTMLElement {
           ffHtml = `<span class="aw-ff-add" data-bookmark="${d}" title="Créer un raccourci Firefox"><ha-icon icon="mdi:firefox" style="--mdc-icon-size:16px"></ha-icon></span>`;
         }
         html += `<div class="aw-site-item">
-          <span class="aw-site-name">${ffHtml}${d}</span>
+          <span class="aw-site-name">${ffHtml}<a href="https://${d}" target="_blank" rel="noopener" class="aw-site-link">${d}</a></span>
           <div class="aw-site-remove" data-remove="${d}" title="Supprimer">
             <ha-icon icon="mdi:close-circle-outline" style="--mdc-icon-size:18px"></ha-icon>
           </div>
