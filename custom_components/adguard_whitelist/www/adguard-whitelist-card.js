@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.3.0";
+const CARD_VERSION = "2.3.1";
 
 /* ── Autocomplete suggestions ────────────────────────────── */
 const DOMAIN_SUGGESTIONS = [
@@ -240,11 +240,11 @@ class AdGuardWhitelistCard extends HTMLElement {
           }
           .aw-ff-icon { color: #ff6611; --mdc-icon-size: 16px; }
           .aw-ff-add {
-            color: var(--disabled-text-color, #bbb); --mdc-icon-size: 16px;
-            cursor: pointer; opacity: 0.4; transition: opacity 0.15s;
+            color: var(--disabled-text-color, #bbb);
+            cursor: pointer; opacity: 0.35; transition: all 0.15s;
+            display: inline-flex; align-items: center;
           }
-          .aw-site-item:hover .aw-ff-add { opacity: 0.8; }
-          .aw-ff-add:hover { color: #ff6611 !important; opacity: 1 !important; }
+          .aw-ff-add:hover { color: #ff6611; opacity: 1; }
           .aw-site-remove {
             cursor: pointer; color: var(--error-color, #f44336);
             opacity: 0.4; transition: opacity 0.15s; display: flex; align-items: center;
@@ -665,7 +665,7 @@ class AdGuardWhitelistCard extends HTMLElement {
         if (hasBm) {
           ffHtml = '<ha-icon icon="mdi:firefox" class="aw-ff-icon"></ha-icon>';
         } else if (sshEnabled) {
-          ffHtml = `<ha-icon icon="mdi:firefox" class="aw-ff-add" data-bookmark="${d}" title="Créer un raccourci Firefox"></ha-icon>`;
+          ffHtml = `<span class="aw-ff-add" data-bookmark="${d}" title="Créer un raccourci Firefox"><ha-icon icon="mdi:firefox" style="--mdc-icon-size:16px"></ha-icon></span>`;
         }
         html += `<div class="aw-site-item">
           <span class="aw-site-name">${ffHtml}${d}</span>
