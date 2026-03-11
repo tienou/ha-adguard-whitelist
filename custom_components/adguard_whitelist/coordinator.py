@@ -13,7 +13,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .api import AdGuardConnectionError, AdGuardHomeAPI
 from .const import DOMAIN, SCAN_INTERVAL_SECONDS
-from .rules import categorize_all, parse_whitelist_rules
+from .rules import categorize_all, categorize_domain, parse_whitelist_rules
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -42,12 +42,15 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         # Key on client_ip so pending commands survive entry reinstalls
         safe_ip = client_ip.replace(".", "_")
         self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_pending_{safe_ip}")
+        self._meta_store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_meta_{safe_ip}")
         self._pending_ssh: list[dict[str, str]] = []
+        # domain → {"category": str, "has_bookmark": bool}
+        self._domain_meta: dict[str, dict[str, Any]] = {}
 
     # ── Persistent SSH queue ────────────────────────────────────
 
     async def async_load_pending(self) -> None:
-        """Load queued SSH commands from disk."""
+        """Load queued SSH commands and domain metadata from disk."""
         data = await self._store.async_load()
         if isinstance(data, dict):
             self._pending_ssh = data.get("pending_ssh", [])
@@ -56,8 +59,16 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     "Loaded %d pending SSH command(s)", len(self._pending_ssh)
                 )
 
+        meta = await self._meta_store.async_load()
+        if isinstance(meta, dict):
+            self._domain_meta = meta
+            _LOGGER.debug("Loaded metadata for %d domain(s)", len(self._domain_meta))
+
     async def _save_pending(self) -> None:
         await self._store.async_save({"pending_ssh": list(self._pending_ssh)})
+
+    async def _save_meta(self) -> None:
+        await self._meta_store.async_save(dict(self._domain_meta))
 
     async def _flush_ssh_pending(self) -> None:
         """Replay queued SSH commands if the machine is online."""
@@ -110,9 +121,30 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def pending_count(self) -> int:
         return len(self._pending_ssh)
 
+    @property
+    def ssh_enabled(self) -> bool:
+        return self.ssh_client is not None
+
+    # ── Domain metadata ──────────────────────────────────────────
+
+    def get_domain_meta(self, domain: str) -> dict[str, Any]:
+        """Get metadata for a domain."""
+        return self._domain_meta.get(domain, {})
+
+    def get_bookmarked_domains(self) -> set[str]:
+        """Return set of domains that have Firefox bookmarks."""
+        return {
+            d for d, m in self._domain_meta.items() if m.get("has_bookmark")
+        }
+
     # ── AdGuard operations ──────────────────────────────────────
 
-    async def async_add_domain(self, domain: str) -> None:
+    async def async_add_domain(
+        self,
+        domain: str,
+        category: str | None = None,
+        create_bookmark: bool = True,
+    ) -> None:
         """Add a whitelisted domain to AdGuard and optionally Firefox."""
         from .rules import add_domain_to_rules
 
@@ -120,7 +152,19 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         current_rules = status.get("user_rules", [])
         new_rules = add_domain_to_rules(current_rules, domain, self.client_ip)
         await self.api.set_rules(new_rules)
-        await self._queue_ssh("add", domain)
+
+        # Store metadata
+        meta: dict[str, Any] = {}
+        if category:
+            meta["category"] = category
+        if create_bookmark and self.ssh_client:
+            await self._queue_ssh("add", domain)
+            meta["has_bookmark"] = True
+        else:
+            meta["has_bookmark"] = False
+
+        self._domain_meta[domain] = meta
+        await self._save_meta()
         await self.async_request_refresh()
 
     async def async_remove_domain(self, domain: str) -> None:
@@ -131,7 +175,13 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         current_rules = status.get("user_rules", [])
         new_rules = remove_domain_from_rules(current_rules, domain, self.client_ip)
         await self.api.set_rules(new_rules)
-        await self._queue_ssh("remove", domain)
+
+        # Remove bookmark if it existed
+        if self._domain_meta.get(domain, {}).get("has_bookmark"):
+            await self._queue_ssh("remove", domain)
+
+        self._domain_meta.pop(domain, None)
+        await self._save_meta()
         await self.async_request_refresh()
 
     # ── Coordinator refresh ─────────────────────────────────────
@@ -153,11 +203,21 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "categories": {},
                 "all_rules_count": 0,
                 "pending_ssh": self.pending_count,
+                "bookmarked_domains": [],
+                "ssh_enabled": self.ssh_enabled,
             }
 
         all_rules = status.get("user_rules", [])
         domains = parse_whitelist_rules(all_rules, self.client_ip)
-        categories = categorize_all(domains)
+
+        # Use user-assigned categories, fallback to auto-detect
+        categories: dict[str, list[str]] = {}
+        for d in domains:
+            meta = self._domain_meta.get(d, {})
+            cat = meta.get("category") or categorize_domain(d)
+            categories.setdefault(cat, []).append(d)
+
+        bookmarked = sorted(self.get_bookmarked_domains())
 
         return {
             "domains": domains,
@@ -165,4 +225,6 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "categories": categories,
             "all_rules_count": len(all_rules),
             "pending_ssh": self.pending_count,
+            "bookmarked_domains": bookmarked,
+            "ssh_enabled": self.ssh_enabled,
         }

@@ -1,70 +1,60 @@
-const CARD_VERSION = "1.1.0";
+const CARD_VERSION = "1.2.0";
 
 /* ── Popular domains for autocomplete ── */
 const DOMAIN_SUGGESTIONS = [
-  // Google
   "google.fr","google.com","gmail.com","drive.google.com","docs.google.com",
   "sheets.google.com","slides.google.com","maps.google.com","translate.google.com",
   "youtube.com","classroom.google.com","meet.google.com","photos.google.com",
   "calendar.google.com","play.google.com",
-  // Microsoft
   "microsoft.com","outlook.com","office.com","teams.microsoft.com",
   "onedrive.live.com","bing.com","live.com","login.microsoftonline.com",
-  // GitHub / Dev
   "github.com","gitlab.com","stackoverflow.com","codepen.io","replit.com",
   "codesandbox.io","w3schools.com","developer.mozilla.org","npmjs.com",
   "python.org","openclassrooms.com","freecodecamp.org","codecademy.com",
   "leetcode.com","hackerrank.com","rust-lang.org","go.dev","devdocs.io",
-  // Education FR
   "wikipedia.org","fr.wikipedia.org","wikimedia.org","khanacademy.org",
   "fr.khanacademy.org","lumni.fr","education.gouv.fr","cned.fr",
   "maxicours.com","kartable.fr","schoolmouv.fr","eduscol.education.fr",
   "pronote.net","ecole-directe.com","myriae.education.fr",
-  // Maths / Sciences
   "geogebra.org","sesamath.net","labomep.sesamath.net","mathway.com",
   "wolframalpha.com","desmos.com","jeuxmaths.fr","calculatice.ac-lille.fr",
-  // Langues
   "duolingo.com","babbel.com","wordreference.com","linguee.fr","deepl.com",
   "conjugueur.reverso.net","context.reverso.net",
-  // Encyclopédies / Référence
   "larousse.fr","universalis.fr","vikidia.org","1jour1actu.com",
-  // Coding enfants
   "scratch.mit.edu","code.org","studio.code.org","makecode.microbit.org",
   "blockly.games","hourofcode.com",
-  // Vidéo
   "netflix.com","disneyplus.com","primevideo.com","france.tv","arte.tv",
   "tf1.fr","6play.fr","twitch.tv","crunchyroll.com","molotov.tv",
-  // Musique
   "spotify.com","open.spotify.com","deezer.com","soundcloud.com",
   "music.youtube.com","music.apple.com",
-  // Gaming
   "minecraft.net","roblox.com","steampowered.com","store.steampowered.com",
   "epicgames.com","ea.com","ubisoft.com","nintendo.com",
   "playstation.com","xbox.com",
-  // Social / Messagerie
   "discord.com","whatsapp.com","web.whatsapp.com","telegram.org",
   "signal.org","snapchat.com",
-  // Outils
   "canva.com","notion.so","trello.com","figma.com","draw.io",
   "excalidraw.com","overleaf.com","chatgpt.com","claude.ai",
-  // Shopping FR
   "amazon.fr","fnac.com","cdiscount.com","darty.com","leboncoin.fr",
   "vinted.fr","backmarket.fr",
-  // Presse FR
   "lemonde.fr","lefigaro.fr","liberation.fr","francetvinfo.fr",
   "20minutes.fr","lequipe.fr","ouest-france.fr",
-  // Services FR
   "allocine.fr","marmiton.org","meteofrance.com","laposte.fr",
   "impots.gouv.fr","ameli.fr","service-public.fr","sncf-connect.com",
-  // Autres
   "apple.com","icloud.com","zoom.us","dropbox.com","wetransfer.com",
   "pinterest.com","reddit.com","medium.com","linkedin.com","adobe.com",
-  // CDN / Technique
   "cloudflare.com","googleapis.com","gstatic.com","amazonaws.com",
   "akamaized.net","jsdelivr.net","unpkg.com","cdnjs.cloudflare.com",
   "bootstrapcdn.com","fonts.googleapis.com","fontawesome.com",
   "gravatar.com","wp.com","fastly.net",
 ].sort();
+
+const CATEGORIES = [
+  { value: "", label: "Auto-detect" },
+  { value: "Éducation", label: "Éducation" },
+  { value: "Programmation", label: "Programmation" },
+  { value: "CDN / Technique", label: "CDN / Technique" },
+  { value: "Autre", label: "Autre" },
+];
 
 /* ── Card ── */
 class AdGuardWhitelistCard extends HTMLElement {
@@ -118,7 +108,6 @@ class AdGuardWhitelistCard extends HTMLElement {
   /* ── Build DOM once ── */
   _buildCard() {
     if (!this.config || !this._hass) return;
-
     const title = this.config.title || "Sites Autorisés";
 
     this.innerHTML = `
@@ -157,6 +146,30 @@ class AdGuardWhitelistCard extends HTMLElement {
         </div>
         <div id="aw-sites"></div>
       </div>
+      <!-- Dialog overlay -->
+      <div class="aw-overlay" id="aw-overlay">
+        <div class="aw-dialog">
+          <div class="aw-dialog-title">Ajouter un site</div>
+          <div class="aw-dialog-domain" id="aw-dlg-domain"></div>
+          <div class="aw-dialog-field">
+            <label>Catégorie</label>
+            <select id="aw-dlg-cat" class="aw-dialog-select">
+              ${CATEGORIES.map(c => `<option value="${c.value}">${c.label}</option>`).join("")}
+            </select>
+          </div>
+          <div class="aw-dialog-field" id="aw-dlg-bm-field">
+            <label class="aw-dialog-check">
+              <input type="checkbox" id="aw-dlg-bm" checked>
+              <ha-icon icon="mdi:firefox" style="--mdc-icon-size:18px;color:#ff7139"></ha-icon>
+              Créer un raccourci Firefox
+            </label>
+          </div>
+          <div class="aw-dialog-actions">
+            <button class="aw-dialog-cancel" id="aw-dlg-cancel">Annuler</button>
+            <button class="aw-dialog-confirm" id="aw-dlg-confirm">Confirmer</button>
+          </div>
+        </div>
+      </div>
     </ha-card>`;
 
     this._bindEvents();
@@ -176,6 +189,11 @@ class AdGuardWhitelistCard extends HTMLElement {
     input.addEventListener("keyup", stop);
     input.addEventListener("keypress", stop);
 
+    // Also stop keyboard events in dialog inputs
+    const dlgCat = this.querySelector("#aw-dlg-cat");
+    dlgCat.addEventListener("keydown", stop);
+    dlgCat.addEventListener("keyup", stop);
+
     input.addEventListener("input", () => {
       this._newDomain = input.value;
       this._highlightIdx = -1;
@@ -193,7 +211,7 @@ class AdGuardWhitelistCard extends HTMLElement {
         if (this._highlightIdx >= 0 && items[this._highlightIdx]) {
           this._selectSuggestion(items[this._highlightIdx].dataset.domain);
         } else {
-          this._addSite();
+          this._openAddDialog();
         }
       } else if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -212,7 +230,14 @@ class AdGuardWhitelistCard extends HTMLElement {
     });
     addBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      this._addSite();
+      this._openAddDialog();
+    });
+
+    // Dialog buttons
+    this.querySelector("#aw-dlg-cancel").addEventListener("click", () => this._closeDialog());
+    this.querySelector("#aw-dlg-confirm").addEventListener("click", () => this._confirmAdd());
+    this.querySelector("#aw-overlay").addEventListener("click", (e) => {
+      if (e.target.id === "aw-overlay") this._closeDialog();
     });
 
     // close dropdown on outside click
@@ -228,6 +253,53 @@ class AdGuardWhitelistCard extends HTMLElement {
         this._removeSite(rm.dataset.remove);
       }
     });
+  }
+
+  /* ── Add dialog ── */
+  _openAddDialog() {
+    if (!this._newDomain) return;
+    let domain = this._newDomain.trim().toLowerCase()
+      .replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    if (!domain) return;
+
+    this._closeDD();
+    this._pendingDomain = domain;
+
+    // Show domain in dialog
+    this.querySelector("#aw-dlg-domain").textContent = domain;
+    // Reset category to auto
+    this.querySelector("#aw-dlg-cat").value = "";
+    // Show/hide bookmark checkbox based on SSH status
+    const sensor = this._findSensor();
+    const sshEnabled = sensor ? (sensor.attributes.ssh_enabled || false) : false;
+    const bmField = this.querySelector("#aw-dlg-bm-field");
+    bmField.style.display = sshEnabled ? "block" : "none";
+    this.querySelector("#aw-dlg-bm").checked = sshEnabled;
+
+    // Show overlay
+    this.querySelector("#aw-overlay").classList.add("visible");
+  }
+
+  _closeDialog() {
+    this.querySelector("#aw-overlay").classList.remove("visible");
+  }
+
+  _confirmAdd() {
+    if (!this._hass || !this._pendingDomain) return;
+    const category = this.querySelector("#aw-dlg-cat").value || undefined;
+    const createBookmark = this.querySelector("#aw-dlg-bm").checked;
+
+    const serviceData = { domain: this._pendingDomain };
+    if (category) serviceData.category = category;
+    serviceData.create_bookmark = createBookmark;
+
+    this._hass.callService("adguard_whitelist", "add_site", serviceData);
+
+    this._newDomain = "";
+    this._pendingDomain = "";
+    const input = this.querySelector("#aw-input");
+    if (input) input.value = "";
+    this._closeDialog();
   }
 
   /* ── Autocomplete ── */
@@ -264,7 +336,7 @@ class AdGuardWhitelistCard extends HTMLElement {
     input.value = domain;
     this._newDomain = domain;
     this._closeDD();
-    this._addSite();
+    this._openAddDialog();
   }
 
   _closeDD() {
@@ -279,7 +351,6 @@ class AdGuardWhitelistCard extends HTMLElement {
     if (this._highlightIdx < 0) this._highlightIdx = items.length - 1;
     if (this._highlightIdx >= items.length) this._highlightIdx = 0;
     items.forEach((el, i) => el.classList.toggle("hl", i === this._highlightIdx));
-    // update input with highlighted value
     if (items[this._highlightIdx]) {
       const input = this.querySelector("#aw-input");
       input.value = items[this._highlightIdx].dataset.domain;
@@ -287,21 +358,6 @@ class AdGuardWhitelistCard extends HTMLElement {
   }
 
   /* ── Actions ── */
-  _addSite() {
-    if (!this._hass || !this._newDomain) return;
-    let domain = this._newDomain
-      .trim()
-      .toLowerCase()
-      .replace(/^https?:\/\//, "")
-      .replace(/\/.*$/, "");
-    if (!domain) return;
-    this._hass.callService("adguard_whitelist", "add_site", { domain });
-    this._newDomain = "";
-    const input = this.querySelector("#aw-input");
-    if (input) input.value = "";
-    this._closeDD();
-  }
-
   _removeSite(domain) {
     if (!this._hass) return;
     this._hass.callService("adguard_whitelist", "remove_site", { domain });
@@ -342,6 +398,7 @@ class AdGuardWhitelistCard extends HTMLElement {
     if (!container) return;
 
     const showCdn = this.config.show_cdn !== false;
+    const bookmarked = sensor ? new Set(sensor.attributes.bookmarked_domains || []) : new Set();
 
     const cats = {};
     if (sensor) {
@@ -373,8 +430,11 @@ class AdGuardWhitelistCard extends HTMLElement {
           <span class="aw-cat-cnt">${domains.length}</span>
         </div>`;
       for (const d of domains) {
+        const hasBm = bookmarked.has(d);
         html += `<div class="aw-site">
-          <span class="aw-site-name">${d}</span>
+          <span class="aw-site-name">
+            ${hasBm ? '<ha-icon icon="mdi:firefox" class="aw-ff-icon"></ha-icon>' : ""}${d}
+          </span>
           <div class="aw-site-rm" data-remove="${d}" title="Supprimer ${d}">
             <ha-icon icon="mdi:close-circle-outline" style="--mdc-icon-size:18px"></ha-icon>
           </div>
@@ -468,6 +528,59 @@ class AdGuardWhitelistCard extends HTMLElement {
       }
       .aw-sug strong { font-weight: 700; }
 
+      /* ── Dialog overlay ── */
+      .aw-overlay {
+        display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,0.5); z-index: 999;
+        justify-content: center; align-items: center;
+      }
+      .aw-overlay.visible { display: flex; }
+      .aw-dialog {
+        background: var(--card-background-color, var(--ha-card-background));
+        border-radius: 16px; padding: 24px; min-width: 320px; max-width: 400px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+      }
+      .aw-dialog-title {
+        font-size: 18px; font-weight: 600; margin-bottom: 16px;
+      }
+      .aw-dialog-domain {
+        font-size: 16px; font-weight: 500; color: var(--primary-color);
+        padding: 8px 12px; background: var(--secondary-background-color, rgba(0,0,0,0.04));
+        border-radius: 8px; margin-bottom: 16px;
+      }
+      .aw-dialog-field { margin-bottom: 16px; }
+      .aw-dialog-field label {
+        display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px;
+        color: var(--secondary-text-color);
+      }
+      .aw-dialog-select {
+        width: 100%; padding: 10px 12px; border: 1px solid var(--divider-color);
+        border-radius: 8px; font-size: 14px; box-sizing: border-box;
+        background: var(--card-background-color, var(--ha-card-background));
+        color: var(--primary-text-color);
+      }
+      .aw-dialog-check {
+        display: flex !important; align-items: center; gap: 8px;
+        cursor: pointer; font-size: 14px !important;
+        color: var(--primary-text-color) !important;
+      }
+      .aw-dialog-check input { width: 18px; height: 18px; cursor: pointer; }
+      .aw-dialog-actions {
+        display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px;
+      }
+      .aw-dialog-cancel {
+        padding: 10px 20px; border: 1px solid var(--divider-color);
+        border-radius: 8px; background: transparent;
+        color: var(--primary-text-color); font-size: 14px; cursor: pointer;
+      }
+      .aw-dialog-cancel:hover { background: var(--secondary-background-color); }
+      .aw-dialog-confirm {
+        padding: 10px 20px; border: none; border-radius: 8px;
+        background: var(--primary-color); color: white;
+        font-size: 14px; font-weight: 500; cursor: pointer;
+      }
+      .aw-dialog-confirm:hover { opacity: 0.9; }
+
       /* ── Categories & sites ── */
       .aw-cat { margin-bottom: 12px; }
       .aw-cat-hdr {
@@ -486,7 +599,13 @@ class AdGuardWhitelistCard extends HTMLElement {
       .aw-site:hover {
         background: var(--secondary-background-color, rgba(0,0,0,0.04));
       }
-      .aw-site-name { font-size: 13px; color: var(--primary-text-color); }
+      .aw-site-name {
+        font-size: 13px; color: var(--primary-text-color);
+        display: flex; align-items: center; gap: 6px;
+      }
+      .aw-ff-icon {
+        --mdc-icon-size: 16px; color: #ff7139; flex-shrink: 0;
+      }
       .aw-site-rm {
         cursor: pointer; color: var(--error-color, #f44336);
         opacity: 0.3; transition: opacity 0.15s; display: flex; align-items: center;

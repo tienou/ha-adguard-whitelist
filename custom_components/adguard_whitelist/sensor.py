@@ -55,6 +55,8 @@ class AdGuardWhitelistCountSensor(AdGuardWhitelistEntity, SensorEntity):
             "domains": data.get("domains", []),
             "total_rules": data.get("all_rules_count", 0),
             "pending_ssh": data.get("pending_ssh", 0),
+            "bookmarked_domains": data.get("bookmarked_domains", []),
+            "ssh_enabled": data.get("ssh_enabled", False),
         }
         categories = data.get("categories", {})
         for cat_name, cat_domains in categories.items():

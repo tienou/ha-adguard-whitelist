@@ -135,11 +135,15 @@ def _register_services(hass: HomeAssistant) -> None:
 
     async def handle_add_site(call: ServiceCall) -> None:
         domain_name = call.data["domain"].lower().strip()
+        category = call.data.get("category")
+        create_bookmark = call.data.get("create_bookmark", True)
         for entry_data in hass.data[DOMAIN].values():
             if not isinstance(entry_data, dict):
                 continue
             coordinator: AdGuardWhitelistCoordinator = entry_data["coordinator"]
-            await coordinator.async_add_domain(domain_name)
+            await coordinator.async_add_domain(
+                domain_name, category=category, create_bookmark=create_bookmark
+            )
 
     async def handle_remove_site(call: ServiceCall) -> None:
         domain_name = call.data["domain"].lower().strip()
@@ -154,7 +158,11 @@ def _register_services(hass: HomeAssistant) -> None:
             DOMAIN,
             SERVICE_ADD_SITE,
             handle_add_site,
-            schema=vol.Schema({vol.Required("domain"): str}),
+            schema=vol.Schema({
+                vol.Required("domain"): str,
+                vol.Optional("category"): str,
+                vol.Optional("create_bookmark", default=True): bool,
+            }),
         )
         hass.services.async_register(
             DOMAIN,
