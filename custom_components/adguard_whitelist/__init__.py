@@ -36,9 +36,19 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
 
 CARD_JS = "adguard-whitelist-card.js"
-LOCAL_CARD_URL = f"/local/{CARD_JS}"
 
 _CARD_REGISTERED = False
+
+
+def _get_version() -> str:
+    """Read version from manifest.json for cache-busting."""
+    import json
+
+    manifest = Path(__file__).parent / "manifest.json"
+    try:
+        return json.loads(manifest.read_text()).get("version", "0")
+    except Exception:
+        return "0"
 
 
 def _deploy_card(hass: HomeAssistant) -> None:
@@ -58,9 +68,10 @@ def _deploy_card(hass: HomeAssistant) -> None:
     except Exception:
         _LOGGER.warning("Could not copy card JS to %s", dst)
 
-    # Register via add_extra_js_url — loads the JS on every HA page
-    # Works reliably because manifest declares "lovelace" as dependency
-    add_extra_js_url(hass, LOCAL_CARD_URL)
+    # Register with cache-busting version parameter
+    version = _get_version()
+    card_url = f"/local/{CARD_JS}?v={version}"
+    add_extra_js_url(hass, card_url)
 
     _CARD_REGISTERED = True
 
