@@ -137,6 +137,35 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             d for d, m in self._domain_meta.items() if m.get("has_bookmark")
         }
 
+    async def _sync_bookmarks_from_firefox(self) -> None:
+        """Sync bookmark metadata by reading actual Firefox bookmarks via SSH."""
+        if not self.ssh_client:
+            return
+
+        try:
+            real_bookmarks = await self.ssh_client.get_existing_bookmarks()
+            _LOGGER.debug(
+                "Synced %d Firefox bookmarks from remote", len(real_bookmarks)
+            )
+            changed = False
+            for domain in real_bookmarks:
+                meta = self._domain_meta.get(domain, {})
+                if not meta.get("has_bookmark"):
+                    meta["has_bookmark"] = True
+                    self._domain_meta[domain] = meta
+                    changed = True
+            # Also clear has_bookmark for domains no longer bookmarked
+            for domain, meta in list(self._domain_meta.items()):
+                if meta.get("has_bookmark") and domain not in real_bookmarks:
+                    meta["has_bookmark"] = False
+                    changed = True
+            if changed:
+                await self._save_meta()
+        except (OSError, asyncssh.Error) as err:
+            _LOGGER.debug("Cannot sync Firefox bookmarks (PC offline?): %s", err)
+        except Exception as err:
+            _LOGGER.warning("Error syncing Firefox bookmarks: %s", err)
+
     # ── AdGuard operations ──────────────────────────────────────
 
     async def async_add_domain(
@@ -190,6 +219,9 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Pull current rules from AdGuard Home."""
         # Flush SSH queue first
         await self._flush_ssh_pending()
+
+        # Sync bookmark metadata from Firefox
+        await self._sync_bookmarks_from_firefox()
 
         try:
             status = await self.api.get_filtering_status()

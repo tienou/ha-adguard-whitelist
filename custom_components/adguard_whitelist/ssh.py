@@ -8,6 +8,7 @@ import asyncssh
 from .const import FIREFOX_POLICIES_PATH
 from .firefox import (
     add_bookmark,
+    get_bookmark_domains,
     parse_policies,
     remove_bookmark,
     serialize_policies,
@@ -36,44 +37,29 @@ class FirefoxSSH:
         return f"echo '{safe_pw}' | sudo -S {command}"
 
     async def execute(self, command: str) -> str:
-        """Execute a command via SSH using create_process for reliable output."""
-        _LOGGER.debug(
-            "SSH connecting to %s@%s:%s",
-            self._username, self._host, self._port,
-        )
-        try:
-            async with asyncssh.connect(
-                self._host,
-                port=self._port,
-                username=self._username,
-                password=self._password,
-                known_hosts=None,
-                client_keys=[],
-            ) as conn:
-                proc = await conn.create_process(command)
-                stdout_data = await proc.stdout.read()
-                await proc.wait_closed()
-                return stdout_data or ""
-        except asyncssh.PermissionDenied as err:
-            _LOGGER.error("SSH auth failed (wrong password?): %s", err)
-            raise
-        except asyncssh.DisconnectError as err:
-            _LOGGER.error("SSH disconnect: code=%s reason=%s", err.code, err.reason)
-            raise
-        except OSError as err:
-            _LOGGER.error("SSH network error (host unreachable?): %s", err)
-            raise
-        except Exception as err:
-            _LOGGER.error("SSH unexpected error [%s]: %s", type(err).__name__, err)
-            raise
+        async with asyncssh.connect(
+            self._host,
+            port=self._port,
+            username=self._username,
+            password=self._password,
+            known_hosts=None,
+        ) as conn:
+            result = await conn.run(command, check=False)
+            if result.exit_status != 0:
+                _LOGGER.warning(
+                    "SSH command exited %s: %s | stderr: %s",
+                    result.exit_status,
+                    command,
+                    result.stderr,
+                )
+            return result.stdout or ""
 
     async def test_connection(self) -> bool:
-        """Test SSH connectivity."""
         try:
             result = await self.execute("echo ok")
             return "ok" in result
         except Exception as err:
-            _LOGGER.error("SSH connection test failed: %s", err)
+            _LOGGER.error("SSH test failed: %s", err)
             return False
 
     async def _read_policies(self) -> dict:
@@ -93,6 +79,11 @@ class FirefoxSSH:
             f" <<'ENDPOLICIES'\n{content}ENDPOLICIES"
         )
         await self.execute(cmd)
+
+    async def get_existing_bookmarks(self) -> set[str]:
+        """Return the set of domains that have Firefox bookmarks."""
+        policies = await self._read_policies()
+        return get_bookmark_domains(policies)
 
     async def add_bookmark(self, domain: str) -> None:
         """Add a bookmark to Firefox policies.json."""

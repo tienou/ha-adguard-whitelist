@@ -53,6 +53,18 @@ def remove_bookmark(policies: dict, domain: str) -> dict:
     return result
 
 
+def get_bookmark_domains(policies: dict) -> set[str]:
+    """Extract the set of bookmarked domains from policies."""
+    domains: set[str] = set()
+    for bm in get_bookmarks(policies):
+        url = bm.get("URL", "")
+        # Extract domain from https://domain or http://domain
+        if "://" in url:
+            domain = url.split("://", 1)[1].split("/")[0].lower()
+            domains.add(domain)
+    return domains
+
+
 def serialize_policies(policies: dict) -> str:
     """Serialize policies dict to formatted JSON."""
     return json.dumps(policies, indent=2, ensure_ascii=False) + "\n"
