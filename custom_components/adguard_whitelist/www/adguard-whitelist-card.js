@@ -1,4 +1,4 @@
-const CARD_VERSION = "2.5.0";
+const CARD_VERSION = "2.5.1";
 
 /* ── Autocomplete suggestions ────────────────────────────── */
 const DOMAIN_SUGGESTIONS = [
@@ -379,13 +379,7 @@ class AdGuardWhitelistCard extends HTMLElement {
     const haCard = this.shadowRoot.querySelector("ha-card");
     if (haCard) {
       haCard.addEventListener("click", (e) => {
-        // Only stop if clicking interactive elements
-        const t = e.composedPath()[0];
-        if (t && (t.closest("[data-open]") || t.closest("[data-remove]") ||
-                  t.closest("[data-bookmark]") || t.closest(".aw-add-btn") ||
-                  t.closest(".aw-add-input") || t.closest(".aw-dd-item"))) {
-          e.stopPropagation();
-        }
+        e.stopPropagation();
       });
     }
   }
@@ -634,7 +628,7 @@ class AdGuardWhitelistCard extends HTMLElement {
           ffHtml = `<span class="aw-ff-add" data-bookmark="${d}" title="Créer un raccourci Firefox"><ha-icon icon="mdi:firefox" style="--mdc-icon-size:18px"></ha-icon></span>`;
         }
         html += `<div class="aw-site-item">
-          <span class="aw-site-name">${ffHtml}<span class="aw-site-link" data-open="${d}">${d}</span></span>
+          <span class="aw-site-name">${ffHtml}<a href="https://${d}" target="_blank" rel="noopener" class="aw-site-link">${d}</a></span>
           <div class="aw-site-actions">
             <div class="aw-site-remove" data-remove="${d}" title="Supprimer">
               <ha-icon icon="mdi:close-circle-outline" style="--mdc-icon-size:20px"></ha-icon>
@@ -651,6 +645,11 @@ class AdGuardWhitelistCard extends HTMLElement {
     }
 
     container.innerHTML = html;
+
+    // Force ha-icon elements to upgrade in Shadow DOM
+    container.querySelectorAll("ha-icon").forEach((el) => {
+      customElements.upgrade(el);
+    });
 
     // Bind remove buttons
     container.querySelectorAll("[data-remove]").forEach((el) => {
@@ -673,12 +672,11 @@ class AdGuardWhitelistCard extends HTMLElement {
       });
     });
 
-    // Bind domain links
-    container.querySelectorAll("[data-open]").forEach((el) => {
+    // Links use <a> tags — Shadow DOM protects from HA event interception
+    // Stop propagation so HA doesn't open more-info dialog
+    container.querySelectorAll(".aw-site-link").forEach((el) => {
       el.addEventListener("click", (e) => {
         e.stopPropagation();
-        e.preventDefault();
-        window.open(`https://${el.dataset.open}`, "_blank");
       });
     });
   }
