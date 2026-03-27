@@ -7,7 +7,6 @@ from pathlib import Path
 
 import voluptuous as vol
 
-from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
@@ -52,26 +51,21 @@ def _get_version() -> str:
 
 
 def _deploy_card(hass: HomeAssistant) -> None:
-    """Copy card JS to www/ and register as extra JS resource."""
+    """Copy card JS to www/ (loaded via Lovelace resources)."""
     global _CARD_REGISTERED
     if _CARD_REGISTERED:
         return
 
-    # Copy to www/ folder (served at /local/)
     src = Path(__file__).parent / "www" / CARD_JS
     dst_dir = Path(hass.config.path("www"))
     dst_dir.mkdir(exist_ok=True)
     dst = dst_dir / CARD_JS
     try:
         shutil.copy2(str(src), str(dst))
-        _LOGGER.info("AdGuard Whitelist card copied to %s", dst)
+        version = _get_version()
+        _LOGGER.info("AdGuard Whitelist card v%s deployed to %s", version, dst)
     except Exception:
-        _LOGGER.warning("Could not copy card JS to %s", dst)
-
-    # Register with cache-busting version parameter
-    version = _get_version()
-    card_url = f"/local/{CARD_JS}?v={version}"
-    add_extra_js_url(hass, card_url)
+        _LOGGER.warning("Could not copy card JS from %s to %s", src, dst)
 
     _CARD_REGISTERED = True
 
