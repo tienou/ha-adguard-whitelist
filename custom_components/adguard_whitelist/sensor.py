@@ -21,10 +21,11 @@ async def async_setup_entry(
     """Set up sensors."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: AdGuardWhitelistCoordinator = data["coordinator"]
-    client_ip: str = data["client_ip"]
+    device_id: str = data["device_id"]
+    backend: str = data["backend"]
 
     async_add_entities([
-        AdGuardWhitelistCountSensor(coordinator, client_ip, entry),
+        AdGuardWhitelistCountSensor(coordinator, device_id, backend, entry),
     ])
 
 
@@ -37,10 +38,11 @@ class AdGuardWhitelistCountSensor(AdGuardWhitelistEntity, SensorEntity):
     def __init__(
         self,
         coordinator: AdGuardWhitelistCoordinator,
-        client_ip: str,
+        device_id: str,
+        backend: str,
         entry: ConfigEntry,
     ) -> None:
-        super().__init__(coordinator, client_ip)
+        super().__init__(coordinator, device_id, backend)
         self._attr_unique_id = f"{entry.entry_id}_whitelist_count"
         self._attr_name = "Sites autorisés"
 
@@ -55,9 +57,12 @@ class AdGuardWhitelistCountSensor(AdGuardWhitelistEntity, SensorEntity):
             "domains": data.get("domains", []),
             "total_rules": data.get("all_rules_count", 0),
             "pending_ssh": data.get("pending_ssh", 0),
+            "pending_dnsmasq": data.get("pending_dnsmasq", 0),
+            "pending_total": data.get("pending_total", 0),
             "bookmarked_domains": data.get("bookmarked_domains", []),
             "ssh_enabled": data.get("ssh_enabled", False),
-            "adguard_reachable": data.get("adguard_reachable", False),
+            "backend": data.get("backend", "adguard"),
+            "backend_reachable": data.get("backend_reachable", False),
             "ssh_reachable": data.get("ssh_reachable", False),
         }
         categories = data.get("categories", {})

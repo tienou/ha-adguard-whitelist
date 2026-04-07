@@ -2,17 +2,31 @@
 
 DOMAIN = "adguard_whitelist"
 
+# Backend choice
+CONF_BACKEND = "backend"
+BACKEND_ADGUARD = "adguard"
+BACKEND_DNSMASQ = "dnsmasq"
+
+# AdGuard Home
 CONF_ADGUARD_URL = "adguard_url"
 CONF_ADGUARD_USER = "adguard_user"
 CONF_ADGUARD_PASSWORD = "adguard_password"
 CONF_CLIENT_IP = "client_ip"
 
-# SSH Firefox (optionnel)
+# SSH (shared by Firefox + dnsmasq)
 CONF_SSH_ENABLED = "ssh_enabled"
 CONF_SSH_HOST = "ssh_host"
+CONF_SSH_HOST_VPN = "ssh_host_vpn"
 CONF_SSH_PORT = "ssh_port"
 CONF_SSH_USER = "ssh_user"
 CONF_SSH_PASSWORD = "ssh_password"
+
+# dnsmasq-specific
+CONF_DNSMASQ_CONF_PATH = "dnsmasq_conf_path"
+CONF_UPSTREAM_DNS = "upstream_dns"
+CONF_FIREFOX_SYNC = "firefox_sync"
+DEFAULT_DNSMASQ_CONF_PATH = "/etc/dnsmasq.d/whitelist-camille.conf"
+DEFAULT_UPSTREAM_DNS = "9.9.9.9"
 
 FIREFOX_POLICIES_PATH = "/usr/lib/firefox/distribution/policies.json"
 

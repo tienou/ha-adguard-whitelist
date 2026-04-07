@@ -2,6 +2,13 @@
   "config": {
     "step": {
       "user": {
+        "title": "Backend de filtrage DNS",
+        "description": "Choisissez comment le filtrage DNS est géré.",
+        "data": {
+          "backend": "Backend"
+        }
+      },
+      "adguard": {
         "title": "Connexion AdGuard Home",
         "description": "Configurez la connexion à votre instance AdGuard Home.",
         "data": {
@@ -25,19 +32,40 @@
           "ssh_user": "Utilisateur SSH",
           "ssh_password": "Mot de passe SSH"
         }
+      },
+      "dnsmasq": {
+        "title": "dnsmasq via SSH",
+        "description": "Configurez l'accès SSH à la machine exécutant dnsmasq.",
+        "data": {
+          "ssh_host": "Hôte SSH (IP locale)",
+          "ssh_host_vpn": "Hôte SSH VPN (optionnel)",
+          "ssh_port": "Port SSH",
+          "ssh_user": "Utilisateur SSH",
+          "ssh_password": "Mot de passe SSH",
+          "dnsmasq_conf_path": "Chemin du fichier de config dnsmasq",
+          "upstream_dns": "Serveur DNS upstream",
+          "firefox_sync": "Synchroniser les favoris Firefox"
+        },
+        "data_description": {
+          "ssh_host": "ex: 192.168.8.50",
+          "ssh_host_vpn": "IP VPN WireGuard, utilisée en fallback (ex: 10.0.0.2)",
+          "dnsmasq_conf_path": "ex: /etc/dnsmasq.d/whitelist-camille.conf",
+          "upstream_dns": "Serveur DNS pour les domaines autorisés (ex: 9.9.9.9)"
+        }
       }
     },
     "error": {
-      "cannot_connect": "Impossible de se connecter à AdGuard Home. Vérifiez l'URL et le port.",
-      "invalid_auth": "Nom d'utilisateur ou mot de passe incorrect."
+      "cannot_connect": "Impossible de se connecter. Vérifiez l'hôte et les identifiants.",
+      "invalid_auth": "Nom d'utilisateur ou mot de passe incorrect.",
+      "conf_not_found": "Fichier de config dnsmasq introuvable ou vide."
     },
     "abort": {
-      "already_configured": "Cette adresse IP est déjà configurée."
+      "already_configured": "Cette configuration est déjà en place."
     }
   },
   "options": {
     "step": {
-      "init": {
+      "adguard": {
         "title": "Paramètres AdGuard Home",
         "data": {
           "adguard_url": "URL AdGuard Home",
@@ -54,6 +82,19 @@
           "ssh_port": "Port SSH",
           "ssh_user": "Utilisateur SSH",
           "ssh_password": "Mot de passe SSH"
+        }
+      },
+      "dnsmasq": {
+        "title": "Paramètres dnsmasq",
+        "data": {
+          "ssh_host": "Hôte SSH (IP locale)",
+          "ssh_host_vpn": "Hôte SSH VPN (optionnel)",
+          "ssh_port": "Port SSH",
+          "ssh_user": "Utilisateur SSH",
+          "ssh_password": "Mot de passe SSH",
+          "dnsmasq_conf_path": "Chemin du fichier de config dnsmasq",
+          "upstream_dns": "Serveur DNS upstream",
+          "firefox_sync": "Synchroniser les favoris Firefox"
         }
       }
     }

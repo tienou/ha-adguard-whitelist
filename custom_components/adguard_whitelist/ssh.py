@@ -26,8 +26,10 @@ class FirefoxSSH:
         port: int,
         username: str,
         password: str,
+        host_vpn: str | None = None,
     ) -> None:
         self._host = host
+        self._host_vpn = host_vpn
         self._port = port
         self._username = username
         self._password = password
@@ -36,33 +38,47 @@ class FirefoxSSH:
         safe_pw = self._password.replace("'", "'\\''")
         return f"echo '{safe_pw}' | sudo -S {command}"
 
+    async def _connect_and_run(self, host: str, command: str) -> str:
+        """Connect to a specific host and run a command."""
+        async with asyncssh.connect(
+            host,
+            port=self._port,
+            username=self._username,
+            password=self._password,
+            known_hosts=None,
+            client_keys=[],
+        ) as conn:
+            proc = await conn.create_process(command)
+            stdout_data = await proc.stdout.read()
+            await proc.wait_closed()
+            return stdout_data or ""
+
     async def execute(self, command: str) -> str:
-        """Execute a command via SSH using create_process for reliable output."""
+        """Execute a command via SSH, with VPN fallback."""
         _LOGGER.debug(
             "SSH connecting to %s@%s:%s",
             self._username, self._host, self._port,
         )
         try:
-            async with asyncssh.connect(
-                self._host,
-                port=self._port,
-                username=self._username,
-                password=self._password,
-                known_hosts=None,
-                client_keys=[],
-            ) as conn:
-                proc = await conn.create_process(command)
-                stdout_data = await proc.stdout.read()
-                await proc.wait_closed()
-                return stdout_data or ""
+            return await self._connect_and_run(self._host, command)
+        except (OSError, asyncssh.DisconnectError) as err:
+            if not self._host_vpn:
+                _LOGGER.error("SSH network error (host unreachable?): %s", err)
+                raise
+            _LOGGER.debug(
+                "SSH to %s failed, trying VPN fallback %s: %s",
+                self._host, self._host_vpn, err,
+            )
+            try:
+                return await self._connect_and_run(self._host_vpn, command)
+            except Exception as vpn_err:
+                _LOGGER.error(
+                    "SSH failed on both %s and VPN %s: %s / %s",
+                    self._host, self._host_vpn, err, vpn_err,
+                )
+                raise
         except asyncssh.PermissionDenied as err:
             _LOGGER.error("SSH auth failed (wrong password?): %s", err)
-            raise
-        except asyncssh.DisconnectError as err:
-            _LOGGER.error("SSH disconnect: code=%s reason=%s", err.code, err.reason)
-            raise
-        except OSError as err:
-            _LOGGER.error("SSH network error (host unreachable?): %s", err)
             raise
         except Exception as err:
             _LOGGER.error("SSH unexpected error [%s]: %s", type(err).__name__, err)

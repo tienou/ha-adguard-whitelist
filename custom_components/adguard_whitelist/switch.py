@@ -20,7 +20,8 @@ async def async_setup_entry(
     """Set up dynamic per-site switches."""
     data = hass.data[DOMAIN][entry.entry_id]
     coordinator: AdGuardWhitelistCoordinator = data["coordinator"]
-    client_ip: str = data["client_ip"]
+    device_id: str = data["device_id"]
+    backend: str = data["backend"]
 
     current_switches: dict[str, AdGuardSiteSwitch] = {}
 
@@ -35,7 +36,7 @@ async def async_setup_entry(
         if new_domains:
             new_entities = []
             for domain in sorted(new_domains):
-                sw = AdGuardSiteSwitch(coordinator, client_ip, domain, entry)
+                sw = AdGuardSiteSwitch(coordinator, device_id, backend, domain, entry)
                 current_switches[domain] = sw
                 new_entities.append(sw)
             async_add_entities(new_entities)
@@ -61,11 +62,12 @@ class AdGuardSiteSwitch(AdGuardWhitelistEntity, SwitchEntity):
     def __init__(
         self,
         coordinator: AdGuardWhitelistCoordinator,
-        client_ip: str,
+        device_id: str,
+        backend: str,
         domain: str,
         entry: ConfigEntry,
     ) -> None:
-        super().__init__(coordinator, client_ip)
+        super().__init__(coordinator, device_id, backend)
         self._domain = domain
         self._attr_unique_id = f"{entry.entry_id}_site_{domain.replace('.', '_')}"
         self._attr_name = domain

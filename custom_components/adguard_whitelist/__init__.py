@@ -12,17 +12,25 @@ from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .api import AdGuardHomeAPI
 from .const import (
+    BACKEND_ADGUARD,
+    BACKEND_DNSMASQ,
     CONF_ADGUARD_PASSWORD,
     CONF_ADGUARD_URL,
     CONF_ADGUARD_USER,
+    CONF_BACKEND,
     CONF_CLIENT_IP,
+    CONF_DNSMASQ_CONF_PATH,
+    CONF_FIREFOX_SYNC,
     CONF_SSH_ENABLED,
     CONF_SSH_HOST,
+    CONF_SSH_HOST_VPN,
     CONF_SSH_PASSWORD,
     CONF_SSH_PORT,
     CONF_SSH_USER,
+    CONF_UPSTREAM_DNS,
+    DEFAULT_DNSMASQ_CONF_PATH,
+    DEFAULT_UPSTREAM_DNS,
     DOMAIN,
     SERVICE_ADD_BOOKMARK,
     SERVICE_ADD_SITE,
@@ -79,38 +87,79 @@ async def async_setup(hass: HomeAssistant, config: dict) -> bool:
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up AdGuard Whitelist from a config entry."""
-    # Ensure card is deployed even if async_setup ran before HTTP was ready
     _deploy_card(hass)
-    session = async_get_clientsession(hass, verify_ssl=False)
-    api = AdGuardHomeAPI(
-        url=entry.data[CONF_ADGUARD_URL],
-        username=entry.data[CONF_ADGUARD_USER],
-        password=entry.data[CONF_ADGUARD_PASSWORD],
-        session=session,
-    )
 
-    # Optional SSH client for Firefox bookmarks
+    backend = entry.data.get(CONF_BACKEND, BACKEND_ADGUARD)
+    api = None
+    dnsmasq_client = None
     ssh_client = None
-    if entry.data.get(CONF_SSH_ENABLED):
-        from .ssh import FirefoxSSH
+    # Used as device/entity identifier
+    device_id = ""
 
-        ssh_client = FirefoxSSH(
+    if backend == BACKEND_DNSMASQ:
+        from .dnsmasq import DnsmasqSSH
+
+        vpn_host = entry.data.get(CONF_SSH_HOST_VPN) or None
+        dnsmasq_client = DnsmasqSSH(
             host=entry.data[CONF_SSH_HOST],
             port=entry.data[CONF_SSH_PORT],
             username=entry.data[CONF_SSH_USER],
             password=entry.data[CONF_SSH_PASSWORD],
+            conf_path=entry.data.get(CONF_DNSMASQ_CONF_PATH, DEFAULT_DNSMASQ_CONF_PATH),
+            upstream_dns=entry.data.get(CONF_UPSTREAM_DNS, DEFAULT_UPSTREAM_DNS),
+            host_vpn=vpn_host,
         )
+        device_id = entry.data[CONF_SSH_HOST]
+
+        # Firefox bookmarks use same SSH connection
+        if entry.data.get(CONF_FIREFOX_SYNC, True):
+            from .ssh import FirefoxSSH
+
+            ssh_client = FirefoxSSH(
+                host=entry.data[CONF_SSH_HOST],
+                port=entry.data[CONF_SSH_PORT],
+                username=entry.data[CONF_SSH_USER],
+                password=entry.data[CONF_SSH_PASSWORD],
+                host_vpn=vpn_host,
+            )
+    else:
+        from .api import AdGuardHomeAPI
+
+        session = async_get_clientsession(hass, verify_ssl=False)
+        api = AdGuardHomeAPI(
+            url=entry.data[CONF_ADGUARD_URL],
+            username=entry.data[CONF_ADGUARD_USER],
+            password=entry.data[CONF_ADGUARD_PASSWORD],
+            session=session,
+        )
+        device_id = entry.data[CONF_CLIENT_IP]
+
+        # Optional SSH client for Firefox bookmarks
+        if entry.data.get(CONF_SSH_ENABLED):
+            from .ssh import FirefoxSSH
+
+            ssh_client = FirefoxSSH(
+                host=entry.data[CONF_SSH_HOST],
+                port=entry.data[CONF_SSH_PORT],
+                username=entry.data[CONF_SSH_USER],
+                password=entry.data[CONF_SSH_PASSWORD],
+            )
 
     coordinator = AdGuardWhitelistCoordinator(
-        hass, api, entry.data[CONF_CLIENT_IP], ssh_client
+        hass,
+        api=api,
+        dnsmasq_client=dnsmasq_client,
+        client_ip=entry.data.get(CONF_CLIENT_IP, ""),
+        ssh_client=ssh_client,
+        backend=backend,
     )
     await coordinator.async_load_pending()
     await coordinator.async_config_entry_first_refresh()
 
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = {
         "coordinator": coordinator,
-        "api": api,
-        "client_ip": entry.data[CONF_CLIENT_IP],
+        "device_id": device_id,
+        "backend": backend,
     }
 
     _register_services(hass)
