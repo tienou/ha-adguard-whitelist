@@ -57,7 +57,8 @@ def remove_domain_from_conf(content: str, domain: str) -> str:
     return "".join(result)
 
 
-_INSTALL_CONF = """+backup=$(mktemp) || exit 1
+_INSTALL_CONF = """
+backup=$(mktemp) || exit 1
 trap 'rm -f -- "$backup"' EXIT
 cp -- "$2" "$backup" || exit 1
 if cp -- "$1" "$2" && systemctl restart dnsmasq; then

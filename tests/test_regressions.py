@@ -93,16 +93,25 @@ class DnsmasqRollbackTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             systemctl = root / "systemctl"
-            systemctl.write_text('#!/bin/sh\n[ "$(cat "$DNSMASQ_FILE")" = "original" ]\n')
+            systemctl.write_text(
+                '#!/bin/sh\nprintf "%s\\n" "$(cat "$DNSMASQ_FILE")" >> "$TRACE"\n'
+                '[ "$(cat "$DNSMASQ_FILE")" = "original" ]\n'
+            )
             systemctl.chmod(0o755)
             original = root / "conf"
             original.write_text("original\n")
             staged = root / "staged"
             staged.write_text("updated\n")
+            trace = root / "restart-trace"
             result = subprocess.run(
                 ["sh", "-c", dnsmasq._INSTALL_CONF, "sh", str(staged), str(original)],
-                env={"PATH": f"{root}:/usr/bin:/bin", "DNSMASQ_FILE": str(original)},
+                env={
+                    "PATH": f"{root}:/usr/bin:/bin",
+                    "DNSMASQ_FILE": str(original),
+                    "TRACE": str(trace),
+                },
                 check=False,
             )
             self.assertEqual(result.returncode, 1)
             self.assertEqual(original.read_text(), "original\n")
+            self.assertEqual(trace.read_text(), "updated\noriginal\n")
