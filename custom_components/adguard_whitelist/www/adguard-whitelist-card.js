@@ -1,4 +1,4 @@
-const CARD_VERSION = "3.0.1";
+const CARD_VERSION = "3.0.2";
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>"']/g, (char) =>

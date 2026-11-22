@@ -7,6 +7,6 @@
   "documentation": "https://github.com/tienou/ha-adguard-whitelist",
   "issue_tracker": "https://github.com/tienou/ha-adguard-whitelist/issues",
   "iot_class": "local_polling",
-  "requirements": ["asyncssh==2.17.0"],
-  "version": "3.0.1"
+  "requirements": ["asyncssh==2.24.1"],
+  "version": "3.0.2"
 }

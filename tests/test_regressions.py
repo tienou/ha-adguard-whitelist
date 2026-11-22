@@ -10,6 +10,8 @@ import types
 import unittest
 from unittest.mock import AsyncMock
 
+import asyncssh
+
 PACKAGE = "test_adguard_whitelist"
 package = types.ModuleType(PACKAGE)
 package.__path__ = [
@@ -50,6 +52,30 @@ class RulesTests(unittest.TestCase):
 
 
 class SSHTests(unittest.IsolatedAsyncioTestCase):
+    async def test_dnsmasq_reads_an_actual_ssh_command_result(self):
+        class LocalSSHServer(asyncssh.SSHServer):
+            def begin_auth(self, username):
+                return False
+
+        async def serve(process):
+            self.assertEqual(process.command, "sudo -S -p '' -- cat -- /etc/test.conf")
+            self.assertEqual(await process.stdin.read(), "fixture-password\n")
+            process.stdout.write("server=/example.fr/9.9.9.9\n")
+            process.exit(0)
+
+        async with await asyncssh.listen(
+            "127.0.0.1",
+            0,
+            server_factory=LocalSSHServer,
+            server_host_keys=[asyncssh.generate_private_key("ssh-ed25519")],
+            process_factory=serve,
+        ) as server:
+            client = dnsmasq.DnsmasqSSH(
+                "127.0.0.1", server.get_port(), "fixture", "fixture-password",
+                conf_path="/etc/test.conf",
+            )
+            self.assertEqual(await client.get_domains(), ["example.fr"])
+
     async def test_password_and_file_use_separate_stdin_streams(self):
         conn = AsyncMock()
         conn.__aenter__.return_value = conn

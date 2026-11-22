@@ -42,7 +42,7 @@ Pour dnsmasq, indiquez l’hôte SSH du PC, le chemin d’un fichier existant da
 
 ## Carte Lovelace
 
-Ajoutez `/local/adguard-whitelist-card.js?v=3.0.1` comme ressource Lovelace de type **Module JavaScript**. Si la ressource existe, mettez à jour le suffixe de version pour recharger le fichier. La carte apparaît ensuite dans le sélecteur. Vous pouvez aussi la déclarer en YAML.
+Ajoutez `/local/adguard-whitelist-card.js?v=3.0.2` comme ressource Lovelace de type **Module JavaScript**. Si la ressource existe, mettez à jour le suffixe de version pour recharger le fichier. La carte apparaît ensuite dans le sélecteur. Vous pouvez aussi la déclarer en YAML.
 
 ```yaml
 type: custom:adguard-whitelist-card
