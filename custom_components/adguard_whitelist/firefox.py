@@ -47,6 +47,8 @@ def remove_bookmark(policies: dict, domain: str) -> dict:
         bm for bm in bookmarks
         if bm.get("URL", "").rstrip("/") != url.rstrip("/")
     ]
+    if new_bookmarks == bookmarks:
+        return policies
 
     result = json.loads(json.dumps(policies))
     result.setdefault("policies", {})["Bookmarks"] = new_bookmarks
@@ -61,8 +63,6 @@ def get_bookmark_domains(policies: dict) -> set[str]:
         # Extract domain from https://domain or http://domain
         if "://" in url:
             domain = url.split("://", 1)[1].split("/")[0].lower()
-            if domain.startswith("www."):
-                domain = domain[4:]
             domains.add(domain)
     return domains
 

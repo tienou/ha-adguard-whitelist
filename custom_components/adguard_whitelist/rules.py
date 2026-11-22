@@ -8,15 +8,35 @@ from .const import CDN_PATTERNS, EDUCATIONAL_SITES
 WHITELIST_RULE_RE = re.compile(
     r"^@@\|\|(?P<domain>[a-zA-Z0-9.\-]+)\^\$client='?(?P<client>[^']+)'?$"
 )
+DNS_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+
+
+def normalize_domain(value: str) -> str:
+    """Convert an internationalized hostname and reject non-domain input."""
+    domain = value.strip().removesuffix(".").encode("idna").decode("ascii").lower()
+    if len(domain) > 253 or not all(
+        DNS_LABEL_RE.fullmatch(label) for label in domain.split(".")
+    ):
+        raise ValueError("Invalid domain name")
+    return domain
+
+
+def _matches_rule(rule: str, domain: str, client_ip: str) -> bool:
+    match = WHITELIST_RULE_RE.fullmatch(rule.strip())
+    return bool(
+        match
+        and match.group("client") == client_ip
+        and match.group("domain").lower() == domain
+    )
 
 
 def parse_whitelist_rules(all_rules: list[str], client_ip: str) -> list[str]:
     """Extract domains whitelisted for the given client IP."""
-    domains: list[str] = []
+    domains: set[str] = set()
     for rule in all_rules:
         match = WHITELIST_RULE_RE.match(rule.strip())
         if match and match.group("client") == client_ip:
-            domains.append(match.group("domain"))
+            domains.add(match.group("domain").lower())
     return sorted(domains)
 
 
@@ -31,7 +51,7 @@ def add_domain_to_rules(
     """Return a new rule list with the domain added (idempotent)."""
     new_rule = format_whitelist_rule(domain, client_ip)
     for rule in all_rules:
-        if rule.strip() == new_rule:
+        if _matches_rule(rule, domain, client_ip):
             return list(all_rules)
     return list(all_rules) + [new_rule]
 
@@ -40,8 +60,7 @@ def remove_domain_from_rules(
     all_rules: list[str], domain: str, client_ip: str
 ) -> list[str]:
     """Return a new rule list with the domain removed."""
-    target = format_whitelist_rule(domain, client_ip)
-    return [r for r in all_rules if r.strip() != target]
+    return [r for r in all_rules if not _matches_rule(r, domain, client_ip)]
 
 
 def categorize_domain(domain: str) -> str:

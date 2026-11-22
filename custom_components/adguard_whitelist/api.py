@@ -1,6 +1,7 @@
 """AdGuard Home REST API client."""
 from __future__ import annotations
 
+import asyncio
 import logging
 
 import aiohttp
@@ -47,7 +48,7 @@ class AdGuardHomeAPI:
                 return await resp.json()
         except AdGuardAuthError:
             raise
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise AdGuardConnectionError(str(err)) from err
 
     async def set_rules(self, rules: list[str]) -> None:
@@ -65,7 +66,7 @@ class AdGuardHomeAPI:
                 resp.raise_for_status()
         except AdGuardAuthError:
             raise
-        except aiohttp.ClientError as err:
+        except (aiohttp.ClientError, asyncio.TimeoutError) as err:
             raise AdGuardConnectionError(str(err)) from err
 
     async def test_connection(self) -> tuple[bool, str]:

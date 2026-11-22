@@ -1,4 +1,12 @@
-const CARD_VERSION = "2.5.7";
+const CARD_VERSION = "3.0.1";
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]
+  );
+}
+
+const DNS_NAME = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*$/i;
 
 /* Firefox SVG (mdi:firefox removed from MDI 7.x used by modern HA) */
 const FF_ICON = `<svg viewBox="0 0 24 24" width="18" height="18" style="vertical-align:middle"><path fill="currentColor" d="M9.27 7.94c.34-.98.98-1.93 1.86-2.6-.9.83-1.4 1.81-1.6 2.6-.02.09-.04.18-.05.27.01-.09.02-.18.05-.27m11.17 4.09c-.41-2.53-2.15-4.75-4.02-5.96.58 1.14.88 2.47.88 3.87 0 .82-.12 1.6-.33 2.34-.22.74-.54 1.43-.95 2.06-.83 1.27-2.01 2.24-3.33 2.93.71.11 1.43.07 2.12-.12a6.89 6.89 0 0 0 4.17-3.21c.67-1.2.63-2.56 1.46-1.91M12 22C6.48 22 2 17.52 2 12S6.48 2 12 2s10 4.48 10 10-4.48 10-10 10m0-18C7.03 4 3 8.03 3 12s4.03 8 9 8 9-4.03 9-8-4.03-8-9-8m-1.17 10.19a5.28 5.28 0 0 0 3.16-1.18 5.29 5.29 0 0 0 1.6-2.56 5.3 5.3 0 0 0 .1-2.78c-.21-.91-.64-1.72-1.21-2.42a5.32 5.32 0 0 0-2.1-1.63 5.27 5.27 0 0 0-2.53-.52c-.88.07-1.72.37-2.44.87-.72.49-1.3 1.17-1.67 1.97-.37.8-.51 1.69-.4 2.55.11.87.46 1.69 1 2.36.54.68 1.26 1.19 2.09 1.48.48.17.99.26 1.5.26.3 0 .6-.03.9-.09"/></svg>`;
@@ -247,7 +255,7 @@ class AdGuardWhitelistCard extends HTMLElement {
   }
 
   setConfig(config) {
-    if (!config.client_ip) throw new Error("Veuillez définir client_ip");
+    if (!config.client_ip && !config.entity) throw new Error("Veuillez définir client_ip ou entity");
     this.config = config;
     this._built = false;
   }
@@ -268,24 +276,32 @@ class AdGuardWhitelistCard extends HTMLElement {
 
   _findSensor() {
     if (!this._hass) return null;
-    // First try: sensor with domains attribute (fully available)
-    let fallback = null;
-    for (const eid of Object.keys(this._hass.states)) {
-      if (eid.startsWith("sensor.") && eid.includes("sites_autoris")) {
-        const s = this._hass.states[eid];
-        if (s.attributes && s.attributes.domains) return s;
-        if (!fallback) fallback = s;
-      }
-    }
-    // Fallback: return sensor even if unavailable (no domains attribute)
-    return fallback;
+    const states = this._hass.states;
+    if (this.config.entity) return states[this.config.entity] || null;
+
+    const candidates = Object.values(states).filter(
+      (state) => state.entity_id.startsWith("sensor.") &&
+        state.attributes.config_entry_id && state.attributes.client === this.config.client_ip
+    );
+    return candidates.length === 1 ? candidates[0] : null;
+  }
+
+  _showError(message = "") {
+    this.$("#aw-error").textContent = message;
+  }
+
+  async _callService(service, data) {
+    const entryId = this._findSensor()?.attributes.config_entry_id;
+    if (!entryId) throw new Error("Sélectionne le capteur du client dans la configuration de la carte.");
+    this._showError();
+    await this._hass.callService("adguard_whitelist", service, { ...data, config_entry_id: entryId });
   }
 
   /* ── Build DOM once (in Shadow DOM) ──────────────────────── */
 
   _buildCard() {
     const title = this.config.title || "Sites Autorisés";
-    const childSuffix = this.config.child_name ? ` — ${this.config.child_name}` : "";
+    const childSuffix = this.config.child_name ? ` — ${escapeHtml(this.config.child_name)}` : "";
 
     this.shadowRoot.innerHTML = `
       <style>${CARD_STYLES}</style>
@@ -296,8 +312,8 @@ class AdGuardWhitelistCard extends HTMLElement {
               <ha-icon icon="mdi:shield-check"></ha-icon>
             </div>
             <div class="aw-header-info">
-              <div class="aw-header-title" id="aw-header-title">${title}${childSuffix}</div>
-              <div class="aw-header-status" id="aw-status">${this.config.client_ip}</div>
+              <div class="aw-header-title" id="aw-header-title">${escapeHtml(title)}${childSuffix}</div>
+              <div class="aw-header-status" id="aw-status"></div>
               <div class="aw-status-row" id="aw-status-row"></div>
             </div>
           </div>
@@ -324,6 +340,7 @@ class AdGuardWhitelistCard extends HTMLElement {
             </button>
           </div>
 
+          <div id="aw-error" role="alert" style="color:var(--error-color)"></div>
           <div id="aw-sites-container"></div>
         </div>
       </ha-card>
@@ -454,9 +471,10 @@ class AdGuardWhitelistCard extends HTMLElement {
 
   _openAddDialog() {
     if (!this._newDomain) return;
-    let domain = this._newDomain.trim().toLowerCase()
-      .replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+    const domain = this._newDomain.trim().toLowerCase()
+      .replace(/^https?:\/\//, "").split(/[/?#]/, 1)[0].replace(/\.$/, "");
     if (!domain) return;
+    this._showError();
     this._closeDD();
     this._pendingDomain = domain;
     this._removeDialog();
@@ -474,7 +492,7 @@ class AdGuardWhitelistCard extends HTMLElement {
     overlay.innerHTML = `
       <div style="background:var(--card-background-color,#1c1c1c);color:var(--primary-text-color,#fff);border-radius:16px;padding:24px;width:340px;max-width:90vw;box-shadow:0 8px 32px rgba(0,0,0,0.3);">
         <h3 style="margin:0 0 16px;font-size:18px;font-weight:500;">Ajouter un site</h3>
-        <div style="background:var(--secondary-background-color,#333);padding:8px 12px;border-radius:8px;font-family:monospace;font-size:14px;margin-bottom:16px;word-break:break-all;">${domain}</div>
+        <div style="background:var(--secondary-background-color,#333);padding:8px 12px;border-radius:8px;font-family:monospace;font-size:14px;margin-bottom:16px;word-break:break-all;">${escapeHtml(domain)}</div>
         <label style="display:block;font-size:13px;font-weight:500;margin-bottom:4px;color:var(--secondary-text-color,#aaa);">Catégorie</label>
         <select id="aw-dlg-cat" style="width:100%;padding:10px 12px;border:1px solid var(--divider-color,#555);border-radius:8px;font-size:14px;margin-bottom:12px;background:var(--card-background-color,#1c1c1c);color:var(--primary-text-color,#fff);box-sizing:border-box;-webkit-appearance:none;">
           <option value="">— Auto-détection —</option>
@@ -505,10 +523,11 @@ class AdGuardWhitelistCard extends HTMLElement {
     });
   }
 
-  _confirmAdd() {
+  async _confirmAdd() {
     if (!this._hass || !this._pendingDomain) return;
     const overlay = document.getElementById("aw-dialog-overlay");
-    if (!overlay) return;
+    const confirmButton = overlay?.querySelector("#aw-dlg-confirm");
+    if (!confirmButton || confirmButton.disabled) return;
 
     const category = overlay.querySelector("#aw-dlg-cat").value || undefined;
     const bmCheckbox = overlay.querySelector("#aw-dlg-bm");
@@ -518,12 +537,18 @@ class AdGuardWhitelistCard extends HTMLElement {
     if (category) serviceData.category = category;
     serviceData.create_bookmark = createBookmark;
 
-    this._hass.callService("adguard_whitelist", "add_site", serviceData);
+    confirmButton.disabled = true;
+    this._removeDialog();
+    try {
+      await this._callService("add_site", serviceData);
+    } catch (error) {
+      this._showError(error.message || "Impossible d’ajouter le site.");
+      return;
+    }
     this._newDomain = "";
     this._pendingDomain = "";
     const input = this.$("#aw-input");
     if (input) input.value = "";
-    this._removeDialog();
   }
 
   _removeDialog() {
@@ -535,13 +560,12 @@ class AdGuardWhitelistCard extends HTMLElement {
 
   _updateData() {
     const sensor = this._findSensor();
-    if (!sensor) return;
-
-    const unavailable = sensor.state === "unavailable" || sensor.state === "unknown";
+    const attrs = sensor?.attributes || {};
+    const unavailable = !sensor || sensor.state === "unavailable" || sensor.state === "unknown";
     const count = unavailable ? "—" : sensor.state;
-    const totalRules = unavailable ? "—" : (sensor.attributes.total_rules || 0);
-    const pendingSsh = (sensor.attributes && sensor.attributes.pending_ssh) || 0;
-    const bookmarked = new Set((sensor.attributes && sensor.attributes.bookmarked_domains) || []);
+    const totalRules = unavailable ? "—" : (attrs.total_rules || 0);
+    const pending = Number(attrs.pending_total ?? attrs.pending_ssh) || 0;
+    const bookmarked = new Set(attrs.bookmarked_domains || []);
     const showCdn = this.config.show_cdn !== false;
 
     const countEl = this.$("#aw-count");
@@ -549,14 +573,15 @@ class AdGuardWhitelistCard extends HTMLElement {
     if (countEl) countEl.textContent = count;
     if (rulesEl) rulesEl.textContent = totalRules;
 
-    const adguardOk = !unavailable && (sensor.attributes || {}).adguard_reachable !== false;
-    const sshOk = (sensor.attributes && sensor.attributes.ssh_reachable) || false;
-    const sshEnabled = (sensor.attributes && sensor.attributes.ssh_enabled) || false;
+    const backendOk = !unavailable && attrs.backend_reachable !== false;
+    const sshOk = !!attrs.ssh_reachable;
+    const sshEnabled = !!attrs.ssh_enabled;
+    this.$("#aw-add-btn").disabled = !attrs.config_entry_id;
 
     const headerIcon = this.$("#aw-header-icon");
     if (headerIcon) {
       // Icon is green only if ALL enabled services are OK
-      const allOk = adguardOk && (!sshEnabled || sshOk);
+      const allOk = backendOk && (!sshEnabled || sshOk);
       headerIcon.style.background = allOk
         ? "var(--success-color, #4caf50)"
         : "var(--error-color, #f44336)";
@@ -564,18 +589,20 @@ class AdGuardWhitelistCard extends HTMLElement {
 
     const statusEl = this.$("#aw-status");
     if (statusEl) {
-      const allOk = adguardOk && (!sshEnabled || sshOk);
+      const allOk = backendOk && (!sshEnabled || sshOk);
       statusEl.style.color = allOk
         ? "var(--success-color, #4caf50)"
         : "var(--error-color, #f44336)";
-      const statusText = !adguardOk ? "Hors ligne" : (sshEnabled && !sshOk ? "SSH hors ligne" : "Connecté");
+      const statusText = !sensor ? "Capteur du client introuvable" : !backendOk
+        ? "Hors ligne" : (sshEnabled && !sshOk ? "Firefox hors ligne" : "Connecté");
       statusEl.innerHTML = statusText +
-        (pendingSsh > 0 ? ` <span class="aw-pending-badge">${pendingSsh} synchro en attente</span>` : "");
+        (pending > 0 ? ` <span class="aw-pending-badge">${pending} en attente</span>` : "");
     }
 
     const statusRow = this.$("#aw-status-row");
     if (statusRow) {
-      let dots = `<span><span class="aw-status-dot ${adguardOk ? "online" : "offline"}"></span>AdGuard</span>`;
+      const backendName = attrs.backend === "dnsmasq" ? "dnsmasq" : "AdGuard";
+      let dots = sensor ? `<span><span class="aw-status-dot ${backendOk ? "online" : "offline"}"></span>${backendName}</span>` : "";
       if (sshEnabled) {
         dots += `<span><span class="aw-status-dot ${sshOk ? "online" : "offline"}"></span>SSH</span>`;
       }
@@ -583,8 +610,7 @@ class AdGuardWhitelistCard extends HTMLElement {
     }
 
     // Build categories
-    const categories = {};
-    const attrs = sensor.attributes || {};
+    const categories = Object.create(null);
     for (const key of Object.keys(attrs)) {
       if (key.startsWith("category_")) {
         let displayName = key.replace("category_", "");
@@ -628,11 +654,12 @@ class AdGuardWhitelistCard extends HTMLElement {
       html += `<div class="aw-category">
         <div class="aw-category-header">
           <ha-icon icon="${icon}" style="--mdc-icon-size:14px;color:${color}"></ha-icon>
-          <span style="color:${color}">${catName}</span>
+          <span style="color:${color}">${escapeHtml(catName)}</span>
           <span class="aw-category-count">${catDomains.length}</span>
         </div>`;
 
       for (const d of catDomains) {
+        if (typeof d !== "string" || !DNS_NAME.test(d)) continue;
         const hasBm = bookmarked.has(d);
         let ffHtml = "";
         if (hasBm) {
@@ -653,7 +680,7 @@ class AdGuardWhitelistCard extends HTMLElement {
       html += `</div>`;
     }
 
-    if (!html) {
+    if (!html && !unavailable) {
       html = '<div style="text-align:center;color:var(--secondary-text-color);padding:16px;">Aucun site autorisé</div>';
     }
 
@@ -688,14 +715,20 @@ class AdGuardWhitelistCard extends HTMLElement {
     // <a> tags work naturally — event listener on host lets links through
   }
 
-  _removeSite(domain) {
-    if (!this._hass) return;
-    this._hass.callService("adguard_whitelist", "remove_site", { domain });
+  async _removeSite(domain) {
+    try {
+      await this._callService("remove_site", { domain });
+    } catch (error) {
+      this._showError(error.message || "Impossible de supprimer le site.");
+    }
   }
 
-  _addBookmark(domain) {
-    if (!this._hass) return;
-    this._hass.callService("adguard_whitelist", "add_bookmark", { domain });
+  async _addBookmark(domain) {
+    try {
+      await this._callService("add_bookmark", { domain });
+    } catch (error) {
+      this._showError(error.message || "Impossible d’ajouter le raccourci.");
+    }
   }
 
   getCardSize() {
@@ -734,16 +767,20 @@ class AdGuardWhitelistCardEditor extends HTMLElement {
       </style>
       <div class="editor">
         <div class="field">
-          <label>IP du client</label>
-          <input type="text" id="client_ip" value="${this._config.client_ip || ""}" placeholder="192.168.8.50">
+          <label for="client_ip">IP ou hôte SSH du client</label>
+          <input type="text" id="client_ip" value="${escapeHtml(this._config.client_ip || "")}" placeholder="192.168.8.50">
+        </div>
+        <div class="field">
+          <label for="entity">Capteur des sites autorisés (optionnel)</label>
+          <input type="text" id="entity" value="${escapeHtml(this._config.entity || "")}" placeholder="sensor.filtrage_dns_sites_autorises">
         </div>
         <div class="field">
           <label>Nom de l'enfant (optionnel)</label>
-          <input type="text" id="child_name" value="${this._config.child_name || ""}" placeholder="Camille">
+          <input type="text" id="child_name" value="${escapeHtml(this._config.child_name || "")}">
         </div>
         <div class="field">
           <label>Titre (optionnel)</label>
-          <input type="text" id="title" value="${this._config.title || ""}" placeholder="Sites Autorisés">
+          <input type="text" id="title" value="${escapeHtml(this._config.title || "")}" placeholder="Sites Autorisés">
         </div>
         <div class="field">
           <label class="check-label">
@@ -756,6 +793,10 @@ class AdGuardWhitelistCardEditor extends HTMLElement {
 
     this.shadowRoot.querySelector("#client_ip").addEventListener("input", (e) => {
       this._config = { ...this._config, client_ip: e.target.value };
+      this._dispatch();
+    });
+    this.shadowRoot.querySelector("#entity").addEventListener("input", (e) => {
+      this._config = { ...this._config, entity: e.target.value };
       this._dispatch();
     });
     this.shadowRoot.querySelector("#child_name").addEventListener("input", (e) => {

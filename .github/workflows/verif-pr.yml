@@ -1,0 +1,27 @@
+name: Vérification de la PR
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Tests et lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - name: Tester le filtrage DNS et les écritures SSH
+        run: |
+          python -m venv "$RUNNER_TEMP/adguard-venv"
+          source "$RUNNER_TEMP/adguard-venv/bin/activate"
+          python -m pip install "$(python -c 'import json; print(json.load(open("custom_components/adguard_whitelist/manifest.json"))["requirements"][0])')"
+          python -m unittest discover -s tests -v
+          python -m compileall -q custom_components/adguard_whitelist
+      - name: Vérifier la carte Lovelace
+        run: |
+          node --check custom_components/adguard_whitelist/www/adguard-whitelist-card.js
+          node --test tests/card.test.cjs

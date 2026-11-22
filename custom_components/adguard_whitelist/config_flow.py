@@ -133,7 +133,12 @@ class AdGuardWhitelistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         self, user_input: dict[str, str] | None = None
     ) -> config_entries.ConfigFlowResult:
         """Step 3a: Optional SSH for Firefox bookmarks (AdGuard mode)."""
-        if user_input is not None:
+        errors: dict[str, str] = {}
+        if user_input and user_input.get(CONF_SSH_ENABLED) and not all(
+            user_input.get(key) for key in (CONF_SSH_HOST, CONF_SSH_USER, CONF_SSH_PASSWORD)
+        ):
+            errors["base"] = "missing_ssh_settings"
+        elif user_input is not None:
             self._data.update(user_input)
             if not user_input.get(CONF_SSH_ENABLED):
                 self._data.pop(CONF_SSH_HOST, None)
@@ -152,6 +157,7 @@ class AdGuardWhitelistConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return self.async_show_form(
             step_id="ssh",
             data_schema=STEP_SSH_SCHEMA,
+            errors=errors,
         )
 
     async def async_step_dnsmasq(
@@ -298,11 +304,22 @@ class AdGuardWhitelistOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, str] | None = None
     ) -> config_entries.ConfigFlowResult:
         """dnsmasq settings."""
+        from .dnsmasq import normalize_upstream
+
+        errors: dict[str, str] = {}
         if user_input is not None:
             data = {**self._entry.data, **user_input}
-            self.hass.config_entries.async_update_entry(self._entry, data=data)
-            await self.hass.config_entries.async_reload(self._entry.entry_id)
-            return self.async_create_entry(title="", data={})
+            data.pop(CONF_SSH_HOST_VPN, None)
+            if user_input.get(CONF_SSH_HOST_VPN):
+                data[CONF_SSH_HOST_VPN] = user_input[CONF_SSH_HOST_VPN]
+            try:
+                data[CONF_UPSTREAM_DNS] = normalize_upstream(data[CONF_UPSTREAM_DNS])
+            except ValueError:
+                errors[CONF_UPSTREAM_DNS] = "invalid_upstream_dns"
+            else:
+                self.hass.config_entries.async_update_entry(self._entry, data=data)
+                await self.hass.config_entries.async_reload(self._entry.entry_id)
+                return self.async_create_entry(title="", data={})
 
         current = self._entry.data
         schema = vol.Schema(
@@ -341,4 +358,4 @@ class AdGuardWhitelistOptionsFlow(config_entries.OptionsFlow):
                 ): bool,
             }
         )
-        return self.async_show_form(step_id="dnsmasq", data_schema=schema)
+        return self.async_show_form(step_id="dnsmasq", data_schema=schema, errors=errors)

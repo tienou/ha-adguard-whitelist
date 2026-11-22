@@ -3,7 +3,7 @@
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 [![GitHub release](https://img.shields.io/github/v/release/tienou/ha-adguard-whitelist)](https://github.com/tienou/ha-adguard-whitelist/releases)
 
-Intégration Home Assistant pour gérer la liste blanche AdGuard Home directement depuis votre dashboard. Pensée pour le contrôle parental : autorisez ou bloquez des sites pour un appareil spécifique sans toucher à l'interface AdGuard.
+Intégration Home Assistant pour gérer depuis votre tableau de bord la liste des sites autorisés d’un appareil. Elle prend en charge AdGuard Home et une liste dnsmasq sur un PC Linux accessible par SSH.
 
 ## Fonctionnalités
 
@@ -28,8 +28,8 @@ Intégration Home Assistant pour gérer la liste blanche AdGuard Home directemen
 ## Configuration
 
 1. **Paramètres** > **Intégrations** > **Ajouter une intégration**
-2. Rechercher "AdGuard Whitelist"
-3. Renseigner :
+2. Rechercher "AdGuard Whitelist" et choisir **AdGuard Home** ou **dnsmasq**.
+3. Pour AdGuard Home, renseigner :
    - URL AdGuard Home (ex: `http://192.168.8.1:3000`)
    - Identifiants AdGuard
    - IP du client (ex: `192.168.8.50`)
@@ -38,9 +38,11 @@ Intégration Home Assistant pour gérer la liste blanche AdGuard Home directemen
    - Port (défaut: 22)
    - Utilisateur / Mot de passe
 
+Pour dnsmasq, indiquez l’hôte SSH du PC, le chemin d’un fichier existant dans `/etc/dnsmasq.d/` et l’adresse IP du DNS amont. Le compte SSH doit pouvoir lire ce fichier avec `sudo`, le mettre à jour et redémarrer `dnsmasq`. Un hôte de secours via VPN et la synchronisation Firefox sont facultatifs.
+
 ## Carte Lovelace
 
-La carte est automatiquement disponible dans le sélecteur de cartes. Configuration manuelle :
+Ajoutez `/local/adguard-whitelist-card.js?v=3.0.1` comme ressource Lovelace de type **Module JavaScript**. Si la ressource existe, mettez à jour le suffixe de version pour recharger le fichier. La carte apparaît ensuite dans le sélecteur. Vous pouvez aussi la déclarer en YAML.
 
 ```yaml
 type: custom:adguard-whitelist-card
@@ -49,7 +51,8 @@ client_ip: "192.168.8.50"
 
 | Option | Défaut | Description |
 |--------|--------|-------------|
-| `client_ip` | *requis* | IP du client AdGuard |
+| `client_ip` | *requis sans `entity`* | IP du client AdGuard ou hôte SSH configuré pour dnsmasq |
+| `entity` | — | Identifiant du capteur « Sites autorisés » à utiliser pour cibler une configuration précise |
 | `title` | "Sites Autorisés" | Titre de la carte |
 | `show_cdn` | `true` | Afficher les domaines CDN/techniques |
 
@@ -67,6 +70,9 @@ client_ip: "192.168.8.50"
 |---------|------------|-------------|
 | `adguard_whitelist.add_site` | `domain` (requis), `category`, `create_bookmark` | Ajouter un site |
 | `adguard_whitelist.remove_site` | `domain` (requis) | Supprimer un site |
+| `adguard_whitelist.add_bookmark` | `domain` (requis) | Créer un favori Firefox |
+
+Ajoutez `config_entry_id` lorsque plusieurs configurations de filtrage sont actives. Cette valeur se trouve dans les attributs du capteur « Sites autorisés » de l’appareil.
 
 Exemples :
 
@@ -111,3 +117,5 @@ L'intégration utilise l'API REST d'AdGuard Home :
 Seules les règles `@@||domaine^$client='IP'` correspondant au client configuré sont touchées. Toutes les autres règles (commentaires, CDN, autres clients, blocages) sont intégralement préservées.
 
 La synchronisation Firefox modifie `/usr/lib/firefox/distribution/policies.json` via SSH avec sudo. Les métadonnées (catégorie, bookmark) sont persistées localement via le Store HA.
+
+En mode dnsmasq, les opérations restent en attente si le PC est indisponible. Après une modification DNS, l’intégration redémarre dnsmasq et restaure le fichier précédent si ce redémarrage échoue.

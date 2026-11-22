@@ -10,6 +10,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .const import (
@@ -37,15 +38,13 @@ from .const import (
     SERVICE_REMOVE_SITE,
 )
 from .coordinator import AdGuardWhitelistCoordinator
+from .rules import normalize_domain
 
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.SENSOR, Platform.SWITCH]
 
 CARD_JS = "adguard-whitelist-card.js"
-
-_CARD_REGISTERED = False
-
 
 def _get_version() -> str:
     """Read version from manifest.json for cache-busting."""
@@ -60,35 +59,28 @@ def _get_version() -> str:
 
 def _deploy_card(hass: HomeAssistant) -> None:
     """Copy card JS to www/ (loaded via Lovelace resources)."""
-    global _CARD_REGISTERED
-    if _CARD_REGISTERED:
-        return
-
     src = Path(__file__).parent / "www" / CARD_JS
     dst_dir = Path(hass.config.path("www"))
-    dst_dir.mkdir(exist_ok=True)
     dst = dst_dir / CARD_JS
     try:
-        shutil.copy2(str(src), str(dst))
+        dst_dir.mkdir(exist_ok=True)
+        shutil.copyfile(src, dst)
         version = _get_version()
         _LOGGER.info("AdGuard Whitelist card v%s deployed to %s", version, dst)
-    except Exception:
-        _LOGGER.warning("Could not copy card JS from %s to %s", src, dst)
-
-    _CARD_REGISTERED = True
+    except OSError as err:
+        _LOGGER.warning("Could not copy card JS from %s to %s: %s", src, dst, err)
 
 
 async def async_setup(hass: HomeAssistant, config: dict) -> bool:
     """Set up the integration domain."""
     hass.data.setdefault(DOMAIN, {})
-    _deploy_card(hass)
+    _register_services(hass)
+    await hass.async_add_executor_job(_deploy_card, hass)
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up AdGuard Whitelist from a config entry."""
-    _deploy_card(hass)
-
     backend = entry.data.get(CONF_BACKEND, BACKEND_ADGUARD)
     api = None
     dnsmasq_client = None
@@ -145,6 +137,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 password=entry.data[CONF_SSH_PASSWORD],
             )
 
+    migrate_dnsmasq_store = backend == BACKEND_DNSMASQ and sum(
+        config.data.get(CONF_BACKEND) == BACKEND_DNSMASQ
+        for config in hass.config_entries.async_entries(DOMAIN)
+    ) == 1
     coordinator = AdGuardWhitelistCoordinator(
         hass,
         api=api,
@@ -152,6 +148,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         client_ip=entry.data.get(CONF_CLIENT_IP, ""),
         ssh_client=ssh_client,
         backend=backend,
+        entry_id=entry.entry_id,
+        migrate_dnsmasq_store=migrate_dnsmasq_store,
     )
     await coordinator.async_load_pending()
     await coordinator.async_config_entry_first_refresh()
@@ -161,8 +159,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "device_id": device_id,
         "backend": backend,
     }
-
-    _register_services(hass)
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
@@ -176,35 +172,40 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
 
 def _register_services(hass: HomeAssistant) -> None:
-    """Register add_site and remove_site services."""
+    """Register services targeting a single loaded configuration."""
+
+    def get_coordinator(call: ServiceCall) -> AdGuardWhitelistCoordinator:
+        entries = hass.data[DOMAIN]
+        entry_id = call.data.get("config_entry_id")
+        if entry_id is None and len(entries) == 1:
+            return next(iter(entries.values()))["coordinator"]
+        if entry_id in entries:
+            return entries[entry_id]["coordinator"]
+        raise HomeAssistantError("Sélectionnez une configuration de filtrage DNS active.")
 
     async def handle_add_site(call: ServiceCall) -> None:
-        domain_name = call.data["domain"].lower().strip()
-        category = call.data.get("category")
-        create_bookmark = call.data.get("create_bookmark", True)
-        for entry_data in hass.data[DOMAIN].values():
-            if not isinstance(entry_data, dict):
-                continue
-            coordinator: AdGuardWhitelistCoordinator = entry_data["coordinator"]
-            await coordinator.async_add_domain(
-                domain_name, category=category, create_bookmark=create_bookmark
-            )
+        await get_coordinator(call).async_add_domain(
+            call.data["domain"],
+            category=call.data.get("category"),
+            create_bookmark=call.data["create_bookmark"],
+        )
 
     async def handle_remove_site(call: ServiceCall) -> None:
-        domain_name = call.data["domain"].lower().strip()
-        for entry_data in hass.data[DOMAIN].values():
-            if not isinstance(entry_data, dict):
-                continue
-            coordinator: AdGuardWhitelistCoordinator = entry_data["coordinator"]
-            await coordinator.async_remove_domain(domain_name)
+        await get_coordinator(call).async_remove_domain(call.data["domain"])
 
     async def handle_add_bookmark(call: ServiceCall) -> None:
-        domain_name = call.data["domain"].lower().strip()
-        for entry_data in hass.data[DOMAIN].values():
-            if not isinstance(entry_data, dict):
-                continue
-            coordinator: AdGuardWhitelistCoordinator = entry_data["coordinator"]
-            await coordinator.async_add_bookmark(domain_name)
+        await get_coordinator(call).async_add_bookmark(call.data["domain"])
+
+    def validate_domain(value: str) -> str:
+        try:
+            return normalize_domain(value)
+        except ValueError as err:
+            raise vol.Invalid("Saisissez un nom de domaine valide.") from err
+
+    target_schema = {
+        vol.Required("domain"): vol.All(str, validate_domain),
+        vol.Optional("config_entry_id"): str,
+    }
 
     if not hass.services.has_service(DOMAIN, SERVICE_ADD_SITE):
         hass.services.async_register(
@@ -212,7 +213,7 @@ def _register_services(hass: HomeAssistant) -> None:
             SERVICE_ADD_SITE,
             handle_add_site,
             schema=vol.Schema({
-                vol.Required("domain"): str,
+                **target_schema,
                 vol.Optional("category"): str,
                 vol.Optional("create_bookmark", default=True): bool,
             }),
@@ -221,11 +222,11 @@ def _register_services(hass: HomeAssistant) -> None:
             DOMAIN,
             SERVICE_REMOVE_SITE,
             handle_remove_site,
-            schema=vol.Schema({vol.Required("domain"): str}),
+            schema=vol.Schema(target_schema),
         )
         hass.services.async_register(
             DOMAIN,
             SERVICE_ADD_BOOKMARK,
             handle_add_bookmark,
-            schema=vol.Schema({vol.Required("domain"): str}),
+            schema=vol.Schema(target_schema),
         )
