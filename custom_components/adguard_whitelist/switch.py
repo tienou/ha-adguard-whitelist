@@ -51,7 +51,7 @@ async def async_setup_entry(
     _update_switches()
 
     # Listen for coordinator updates
-    coordinator.async_add_listener(_update_switches)
+    entry.async_on_unload(coordinator.async_add_listener(_update_switches))
 
 
 class AdGuardSiteSwitch(AdGuardWhitelistEntity, SwitchEntity):

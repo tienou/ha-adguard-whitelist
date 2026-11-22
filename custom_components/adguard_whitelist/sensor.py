@@ -45,6 +45,7 @@ class AdGuardWhitelistCountSensor(AdGuardWhitelistEntity, SensorEntity):
         super().__init__(coordinator, device_id, backend)
         self._attr_unique_id = f"{entry.entry_id}_whitelist_count"
         self._attr_name = "Sites autorisés"
+        self._entry_id = entry.entry_id
 
     @property
     def native_value(self) -> int:
@@ -54,6 +55,8 @@ class AdGuardWhitelistCountSensor(AdGuardWhitelistEntity, SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data
         attrs: dict[str, Any] = {
+            "config_entry_id": self._entry_id,
+            "client": self._device_id,
             "domains": data.get("domains", []),
             "total_rules": data.get("all_rules_count", 0),
             "pending_ssh": data.get("pending_ssh", 0),

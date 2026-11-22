@@ -57,13 +57,18 @@
     "error": {
       "cannot_connect": "Impossible de se connecter. Vérifiez l'hôte et les identifiants.",
       "invalid_auth": "Nom d'utilisateur ou mot de passe incorrect.",
-      "conf_not_found": "Fichier de config dnsmasq introuvable ou vide."
+      "conf_not_found": "Impossible de lire le fichier de configuration dnsmasq.",
+      "invalid_upstream_dns": "Saisissez une adresse IP valide pour le DNS amont.",
+      "missing_ssh_settings": "Renseignez l’hôte, l’utilisateur et le mot de passe SSH."
     },
     "abort": {
       "already_configured": "Cette configuration est déjà en place."
     }
   },
   "options": {
+    "error": {
+      "invalid_upstream_dns": "Saisissez une adresse IP valide pour le DNS amont."
+    },
     "step": {
       "adguard": {
         "title": "Paramètres AdGuard Home",

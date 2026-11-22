@@ -1,7 +1,9 @@
 """Data update coordinator for AdGuard Whitelist with offline SSH queue."""
 from __future__ import annotations
 
+import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
@@ -12,7 +14,12 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 
 from .const import BACKEND_DNSMASQ, DOMAIN, SCAN_INTERVAL_SECONDS
-from .rules import categorize_domain, parse_whitelist_rules
+from .rules import (
+    add_domain_to_rules,
+    categorize_domain,
+    parse_whitelist_rules,
+    remove_domain_from_rules,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -31,6 +38,8 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         client_ip: str = "",
         ssh_client: Any | None = None,
         backend: str = "adguard",
+        entry_id: str,
+        migrate_dnsmasq_store: bool = False,
     ) -> None:
         super().__init__(
             hass,
@@ -44,10 +53,14 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.ssh_client = ssh_client
         self.backend = backend
 
-        # Key on client_ip or backend identifier
-        safe_id = client_ip.replace(".", "_") if client_ip else "dnsmasq"
+        safe_id = f"dnsmasq_{entry_id}" if self.is_dnsmasq else client_ip.replace(".", "_")
         self._store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_pending_{safe_id}")
         self._meta_store = Store(hass, STORAGE_VERSION, f"{DOMAIN}_meta_{safe_id}")
+        self._entry_id = entry_id
+        self._migrate_dnsmasq_store = migrate_dnsmasq_store
+        self._operation_lock = asyncio.Lock()
+        self._rules_lock = hass.data.setdefault(f"{DOMAIN}_rules_lock", asyncio.Lock())
+        self._last_dnsmasq_domains: list[str] = []
 
         # Firefox bookmark queue (works for both backends)
         self._pending_ssh: list[dict[str, str]] = []
@@ -65,6 +78,10 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_load_pending(self) -> None:
         """Load queued commands and domain metadata from disk."""
         data = await self._store.async_load()
+        meta = await self._meta_store.async_load()
+        if self.is_dnsmasq and (data is None or meta is None):
+            data, meta = await self._load_legacy_dnsmasq(data, meta)
+
         if isinstance(data, dict):
             self._pending_ssh = data.get("pending_ssh", [])
             self._pending_dnsmasq = data.get("pending_dnsmasq", [])
@@ -75,10 +92,36 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     total, len(self._pending_ssh), len(self._pending_dnsmasq),
                 )
 
-        meta = await self._meta_store.async_load()
         if isinstance(meta, dict):
             self._domain_meta = meta
             _LOGGER.debug("Loaded metadata for %d domain(s)", len(self._domain_meta))
+
+    async def _load_legacy_dnsmasq(self, data: dict | None, meta: dict | None) -> tuple:
+        """Keep the shared legacy store unless its only possible owner is known."""
+        async with self._rules_lock:
+            legacy_store = Store(self.hass, STORAGE_VERSION, f"{DOMAIN}_pending_dnsmasq")
+            legacy_meta_store = Store(self.hass, STORAGE_VERSION, f"{DOMAIN}_meta_dnsmasq")
+            legacy_data = await legacy_store.async_load() or {}
+            legacy_meta = await legacy_meta_store.async_load()
+            if not legacy_data and not legacy_meta:
+                return data, meta
+            if "migration_owner" not in legacy_data:
+                legacy_data["migration_owner"] = (
+                    self._entry_id if self._migrate_dnsmasq_store else None
+                )
+                await legacy_store.async_save(legacy_data)
+            if legacy_data["migration_owner"] != self._entry_id:
+                return data, meta
+            if data is None:
+                data = {
+                    "pending_ssh": legacy_data.get("pending_ssh", []),
+                    "pending_dnsmasq": legacy_data.get("pending_dnsmasq", []),
+                }
+                await self._store.async_save(data)
+            if meta is None:
+                meta = legacy_meta or {}
+                await self._meta_store.async_save(meta)
+            return data, meta
 
     async def _save_pending(self) -> None:
         await self._store.async_save({
@@ -89,117 +132,40 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def _save_meta(self) -> None:
         await self._meta_store.async_save(dict(self._domain_meta))
 
-    # ── Firefox bookmark queue (SSH) ───────────────────────────
+    async def _enqueue(
+        self, queue: list[dict[str, str]], action: str, domain: str,
+    ) -> None:
+        """Persist the latest intent before trying to apply it remotely."""
+        queue[:] = [cmd for cmd in queue if cmd["domain"] != domain]
+        queue.append({"action": action, "domain": domain})
+        await self._save_pending()
 
-    async def _flush_ssh_pending(self) -> None:
-        """Replay queued Firefox bookmark commands if the machine is online."""
-        if not self._pending_ssh or not self.ssh_client:
-            return
-
-        flushed: list[int] = []
-        for i, cmd in enumerate(self._pending_ssh):
+    async def _flush_pending(
+        self,
+        queue: list[dict[str, str]],
+        add: Callable[[str], Awaitable[None]],
+        remove: Callable[[str], Awaitable[None]],
+        label: str,
+    ) -> None:
+        """Replay queued operations in order and retain any failed operation."""
+        applied = 0
+        for cmd in queue:
             try:
-                action = cmd["action"]
-                domain = cmd["domain"]
-                if action == "add":
-                    await self.ssh_client.add_bookmark(domain)
-                elif action == "remove":
-                    await self.ssh_client.remove_bookmark(domain)
-                flushed.append(i)
-                _LOGGER.info("Flushed pending SSH bookmark: %s %s", action, domain)
+                operation = {"add": add, "remove": remove}[cmd["action"]]
+                await operation(cmd["domain"])
+            except asyncssh.ProcessError as err:
+                _LOGGER.warning("%s operation failed (exit %s)", label, err.exit_status)
+                break
             except (OSError, asyncssh.Error) as err:
-                _LOGGER.debug("SSH still offline for bookmarks: %s", err)
+                _LOGGER.debug("%s SSH unavailable: %s", label, err)
                 break
             except Exception as err:
-                _LOGGER.warning("SSH unexpected error during bookmark flush: %s", err)
+                _LOGGER.warning("%s operation remains pending: %s", label, err)
                 break
-
-        if flushed:
-            for i in reversed(flushed):
-                self._pending_ssh.pop(i)
+            applied += 1
+        if applied:
+            del queue[:applied]
             await self._save_pending()
-
-    async def _queue_ssh(self, action: str, domain: str) -> None:
-        """Queue a Firefox bookmark command, executing immediately if possible."""
-        if not self.ssh_client:
-            return
-
-        try:
-            if action == "add":
-                await self.ssh_client.add_bookmark(domain)
-            elif action == "remove":
-                await self.ssh_client.remove_bookmark(domain)
-        except (OSError, asyncssh.Error):
-            _LOGGER.info("PC offline — queuing bookmark %s %s", action, domain)
-            self._pending_ssh.append({"action": action, "domain": domain})
-            await self._save_pending()
-        except Exception as err:
-            _LOGGER.warning("SSH error — queuing bookmark %s %s: %s", action, domain, err)
-            self._pending_ssh.append({"action": action, "domain": domain})
-            await self._save_pending()
-
-    # ── dnsmasq operation queue ────────────────────────────────
-
-    async def _flush_dnsmasq_pending(self) -> None:
-        """Replay queued dnsmasq domain operations if the machine is online."""
-        if not self._pending_dnsmasq or not self.dnsmasq_client:
-            return
-
-        flushed: list[int] = []
-        for i, cmd in enumerate(self._pending_dnsmasq):
-            try:
-                action = cmd["action"]
-                domain = cmd["domain"]
-                if action == "add":
-                    await self.dnsmasq_client.add_domain(domain)
-                elif action == "remove":
-                    await self.dnsmasq_client.remove_domain(domain)
-                flushed.append(i)
-                _LOGGER.info("Flushed pending dnsmasq: %s %s", action, domain)
-            except (OSError, asyncssh.Error) as err:
-                _LOGGER.debug("SSH still offline for dnsmasq: %s", err)
-                break
-            except Exception as err:
-                _LOGGER.warning("dnsmasq unexpected error during flush: %s", err)
-                break
-
-        if flushed:
-            for i in reversed(flushed):
-                self._pending_dnsmasq.pop(i)
-            await self._save_pending()
-
-    async def _queue_dnsmasq(self, action: str, domain: str) -> None:
-        """Queue a dnsmasq operation, executing immediately if possible."""
-        if not self.dnsmasq_client:
-            return
-
-        try:
-            if action == "add":
-                await self.dnsmasq_client.add_domain(domain)
-            elif action == "remove":
-                await self.dnsmasq_client.remove_domain(domain)
-        except (OSError, asyncssh.Error):
-            _LOGGER.info("PC offline — queuing dnsmasq %s %s", action, domain)
-            # Cancel out opposite pending operations for same domain
-            self._deduplicate_pending_dnsmasq(action, domain)
-            self._pending_dnsmasq.append({"action": action, "domain": domain})
-            await self._save_pending()
-        except Exception as err:
-            _LOGGER.warning("dnsmasq error — queuing %s %s: %s", action, domain, err)
-            self._deduplicate_pending_dnsmasq(action, domain)
-            self._pending_dnsmasq.append({"action": action, "domain": domain})
-            await self._save_pending()
-
-    def _deduplicate_pending_dnsmasq(self, action: str, domain: str) -> None:
-        """Remove previous pending operations for the same domain.
-
-        If we queue "add foo.com" then "remove foo.com", the add is useless.
-        Only keep the latest intent for each domain.
-        """
-        self._pending_dnsmasq = [
-            cmd for cmd in self._pending_dnsmasq
-            if cmd["domain"] != domain
-        ]
 
     # ── Properties ─────────────────────────────────────────────
 
@@ -231,10 +197,10 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             d for d, m in self._domain_meta.items() if m.get("has_bookmark")
         }
 
-    async def _sync_bookmarks_from_firefox(self) -> None:
+    async def _sync_bookmarks_from_firefox(self) -> bool:
         """Sync bookmark metadata by reading actual Firefox bookmarks via SSH."""
         if not self.ssh_client:
-            return
+            return False
 
         try:
             real_bookmarks = await self.ssh_client.get_existing_bookmarks()
@@ -242,7 +208,8 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Synced %d Firefox bookmarks from remote", len(real_bookmarks)
             )
             changed = False
-            for domain in real_bookmarks:
+            pending = {cmd["domain"] for cmd in self._pending_ssh}
+            for domain in real_bookmarks - pending:
                 meta = self._domain_meta.get(domain, {})
                 if not meta.get("has_bookmark"):
                     meta["has_bookmark"] = True
@@ -250,15 +217,17 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     changed = True
             # Also clear has_bookmark for domains no longer bookmarked
             for domain, meta in list(self._domain_meta.items()):
-                if meta.get("has_bookmark") and domain not in real_bookmarks:
+                if meta.get("has_bookmark") and domain not in real_bookmarks | pending:
                     meta["has_bookmark"] = False
                     changed = True
             if changed:
                 await self._save_meta()
+            return True
         except (OSError, asyncssh.Error) as err:
             _LOGGER.debug("Cannot sync Firefox bookmarks (PC offline?): %s", err)
         except Exception as err:
             _LOGGER.warning("Error syncing Firefox bookmarks: %s", err)
+        return False
 
     # ── Optimistic domain list ─────────────────────────────────
 
@@ -285,124 +254,93 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         create_bookmark: bool = True,
     ) -> None:
         """Add a whitelisted domain."""
-        if self.is_dnsmasq:
-            await self._queue_dnsmasq("add", domain)
-        else:
-            from .rules import add_domain_to_rules
+        async with self._operation_lock:
+            if self.is_dnsmasq:
+                await self._enqueue(self._pending_dnsmasq, "add", domain)
+            else:
+                await self._update_adguard_rules(add_domain_to_rules, domain)
 
-            status = await self.api.get_filtering_status()
-            current_rules = status.get("user_rules", [])
-            new_rules = add_domain_to_rules(current_rules, domain, self.client_ip)
-            await self.api.set_rules(new_rules)
-
-        # Store metadata
-        meta: dict[str, Any] = {}
-        if category:
-            meta["category"] = category
-        if create_bookmark and self.ssh_client:
-            await self._queue_ssh("add", domain)
-            meta["has_bookmark"] = True
-        else:
-            meta["has_bookmark"] = False
-
-        self._domain_meta[domain] = meta
-        await self._save_meta()
+            meta = self._domain_meta.setdefault(domain, {})
+            if category:
+                meta["category"] = category
+            if create_bookmark and self.ssh_client:
+                await self._enqueue(self._pending_ssh, "add", domain)
+                meta["has_bookmark"] = True
+            await self._save_meta()
         await self.async_request_refresh()
 
     async def async_add_bookmark(self, domain: str) -> None:
         """Add a Firefox bookmark for an already whitelisted domain."""
         if not self.ssh_client:
             return
-        await self._queue_ssh("add", domain)
-        meta = self._domain_meta.get(domain, {})
-        meta["has_bookmark"] = True
-        self._domain_meta[domain] = meta
-        await self._save_meta()
+        async with self._operation_lock:
+            await self._enqueue(self._pending_ssh, "add", domain)
+            self._domain_meta.setdefault(domain, {})["has_bookmark"] = True
+            await self._save_meta()
         await self.async_request_refresh()
 
     async def async_remove_domain(self, domain: str) -> None:
         """Remove a whitelisted domain."""
-        if self.is_dnsmasq:
-            await self._queue_dnsmasq("remove", domain)
-        else:
-            from .rules import remove_domain_from_rules
+        async with self._operation_lock:
+            if self.is_dnsmasq:
+                await self._enqueue(self._pending_dnsmasq, "remove", domain)
+            else:
+                await self._update_adguard_rules(remove_domain_from_rules, domain)
 
-            status = await self.api.get_filtering_status()
-            current_rules = status.get("user_rules", [])
-            new_rules = remove_domain_from_rules(current_rules, domain, self.client_ip)
-            await self.api.set_rules(new_rules)
-
-        # Remove bookmark if it existed
-        if self._domain_meta.get(domain, {}).get("has_bookmark"):
-            await self._queue_ssh("remove", domain)
-
-        self._domain_meta.pop(domain, None)
-        await self._save_meta()
+            meta = self._domain_meta.pop(domain, {})
+            if self.ssh_client and (
+                meta.get("has_bookmark")
+                or any(cmd["domain"] == domain for cmd in self._pending_ssh)
+            ):
+                await self._enqueue(self._pending_ssh, "remove", domain)
+            await self._save_meta()
         await self.async_request_refresh()
+
+    async def _update_adguard_rules(
+        self, edit: Callable[[list[str], str, str], list[str]], domain: str,
+    ) -> None:
+        # AdGuard replaces the instance's entire ruleset in a single request.
+        async with self._rules_lock:
+            status = await self.api.get_filtering_status()
+            current = status.get("user_rules", [])
+            updated = edit(current, domain, self.client_ip)
+            if updated != current:
+                await self.api.set_rules(updated)
 
     # ── Coordinator refresh ─────────────────────────────────────
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Pull current whitelist state."""
-        # 1. Flush dnsmasq queue first (most important — DNS access)
-        if self.is_dnsmasq:
-            await self._flush_dnsmasq_pending()
-
-        # 2. Flush Firefox bookmark queue
-        await self._flush_ssh_pending()
-
-        # 3. Sync bookmark metadata from Firefox
-        await self._sync_bookmarks_from_firefox()
-
-        # 4. Check SSH reachability (skip redundant check if dnsmasq
-        #    already proved SSH works during flush/get_domains)
-        ssh_reachable = False
-        if self.ssh_client:
-            try:
-                await self.ssh_client.execute("echo ok")
-                ssh_reachable = True
-            except Exception:
-                ssh_reachable = False
-
-        if self.is_dnsmasq:
-            return await self._update_dnsmasq(ssh_reachable)
-        return await self._update_adguard(ssh_reachable)
+        async with self._operation_lock:
+            if self.dnsmasq_client:
+                await self._flush_pending(
+                    self._pending_dnsmasq,
+                    self.dnsmasq_client.add_domain,
+                    self.dnsmasq_client.remove_domain,
+                    "dnsmasq",
+                )
+            if self.ssh_client:
+                await self._flush_pending(
+                    self._pending_ssh,
+                    self.ssh_client.add_bookmark,
+                    self.ssh_client.remove_bookmark,
+                    "Firefox",
+                )
+            ssh_reachable = await self._sync_bookmarks_from_firefox()
+            if self.is_dnsmasq:
+                return await self._update_dnsmasq(ssh_reachable)
+            return await self._update_adguard(ssh_reachable)
 
     async def _update_dnsmasq(self, ssh_reachable: bool) -> dict[str, Any]:
         """Refresh from dnsmasq config via SSH."""
         backend_reachable = True
         try:
-            domains = await self.dnsmasq_client.get_domains()
+            self._last_dnsmasq_domains = await self.dnsmasq_client.get_domains()
         except Exception as err:
             _LOGGER.warning("Cannot reach dnsmasq via SSH: %s", err)
             backend_reachable = False
 
-            # Optimistic: apply pending ops to last known domains
-            prev_domains = self.data.get("domains", []) if self.data else []
-            domains = self._apply_pending_dnsmasq(prev_domains)
-
-            categories: dict[str, list[str]] = {}
-            for d in domains:
-                meta = self._domain_meta.get(d, {})
-                cat = meta.get("category") or categorize_domain(d)
-                categories.setdefault(cat, []).append(d)
-
-            return {
-                "domains": domains,
-                "count": len(domains),
-                "categories": categories,
-                "all_rules_count": len(domains),
-                "pending_ssh": self.pending_ssh_count,
-                "pending_dnsmasq": self.pending_dnsmasq_count,
-                "pending_total": self.pending_count,
-                "bookmarked_domains": sorted(self.get_bookmarked_domains()),
-                "ssh_enabled": self.ssh_enabled,
-                "backend_reachable": False,
-                "ssh_reachable": ssh_reachable,
-                "backend": BACKEND_DNSMASQ,
-            }
-
-        # Backend is online — domain list is authoritative
+        domains = self._apply_pending_dnsmasq(self._last_dnsmasq_domains)
         categories: dict[str, list[str]] = {}
         for d in domains:
             meta = self._domain_meta.get(d, {})
@@ -415,7 +353,7 @@ class AdGuardWhitelistCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "domains": domains,
             "count": len(domains),
             "categories": categories,
-            "all_rules_count": len(domains),
+            "all_rules_count": len(self._last_dnsmasq_domains),
             "pending_ssh": self.pending_ssh_count,
             "pending_dnsmasq": self.pending_dnsmasq_count,
             "pending_total": self.pending_count,

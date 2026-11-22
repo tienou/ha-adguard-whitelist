@@ -57,13 +57,18 @@
     "error": {
       "cannot_connect": "Cannot connect. Check host/credentials.",
       "invalid_auth": "Invalid username or password.",
-      "conf_not_found": "dnsmasq config file not found or empty."
+      "conf_not_found": "The dnsmasq configuration file could not be read.",
+      "invalid_upstream_dns": "Enter a valid upstream DNS IP address.",
+      "missing_ssh_settings": "Enter the SSH host, username and password."
     },
     "abort": {
       "already_configured": "This configuration is already set up."
     }
   },
   "options": {
+    "error": {
+      "invalid_upstream_dns": "Enter a valid upstream DNS IP address."
+    },
     "step": {
       "adguard": {
         "title": "AdGuard Home Settings",
