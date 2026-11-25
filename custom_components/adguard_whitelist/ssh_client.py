@@ -1,6 +1,7 @@
 """Shared SSH transport for the remote configuration files."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from shlex import quote
 
@@ -41,14 +42,27 @@ class SSHClient:
                 _LOGGER.debug("SSH unavailable on %s, trying %s", host, self._host_vpn)
         raise OSError("No SSH host configured")
 
+    async def _run(
+        self, conn: asyncssh.SSHClientConnection, command: str, input: str | None = None,
+    ) -> str:
+        # Not conn.run(): asyncssh < 2.20 builds its result without fields on Python 3.14.
+        process = await conn.create_process(command)
+        try:
+            if input:
+                process.stdin.write(input)
+            process.stdin.write_eof()
+            stdout, stderr = await asyncio.wait_for(process.communicate(), _TIMEOUT)
+        finally:
+            process.close()
+        if process.exit_status != 0:
+            raise asyncssh.ProcessError(
+                process.env, command, None, process.exit_status, process.exit_signal,
+                process.returncode, stdout, stderr,
+            )
+        return stdout or ""
+
     async def _sudo(self, conn: asyncssh.SSHClientConnection, command: str) -> str:
-        result = await conn.run(
-            f"sudo -S -p '' -- {command}",
-            input=self._password + "\n",
-            check=True,
-            timeout=_TIMEOUT,
-        )
-        return result.stdout or ""
+        return await self._run(conn, f"sudo -S -p '' -- {command}", self._password + "\n")
 
     async def read_file(self, path: str) -> str:
         async with await self._connect() as conn:
@@ -56,16 +70,13 @@ class SSHClient:
 
     async def write_file(self, path: str, content: str) -> None:
         async with await self._connect() as conn:
-            temp = await conn.run("mktemp", check=True, timeout=_TIMEOUT)
-            staged = quote(temp.stdout.strip())
+            staged = quote((await self._run(conn, "mktemp")).strip())
             try:
-                await conn.run(
-                    f"cat > {staged}", input=content, check=True, timeout=_TIMEOUT,
-                )
+                await self._run(conn, f"cat > {staged}", content)
                 await self._install_file(conn, staged, quote(path))
             finally:
                 try:
-                    await conn.run(f"rm -f -- {staged}", check=True, timeout=_TIMEOUT)
+                    await self._run(conn, f"rm -f -- {staged}")
                 except (OSError, asyncssh.Error):
                     _LOGGER.debug("Could not remove the SSH staging file")
 
