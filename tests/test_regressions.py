@@ -51,61 +51,83 @@ class RulesTests(unittest.TestCase):
             dnsmasq.normalize_upstream("fe80::1%eth0\nnew directive")
 
 
+class LocalSSHServer(asyncssh.SSHServer):
+    def begin_auth(self, username):
+        return False
+
+
+async def local_ssh_server(serve):
+    return await asyncssh.listen(
+        "127.0.0.1",
+        0,
+        server_factory=LocalSSHServer,
+        server_host_keys=[asyncssh.generate_private_key("ssh-ed25519")],
+        process_factory=serve,
+    )
+
+
 class SSHTests(unittest.IsolatedAsyncioTestCase):
     async def test_dnsmasq_reads_an_actual_ssh_command_result(self):
-        class LocalSSHServer(asyncssh.SSHServer):
-            def begin_auth(self, username):
-                return False
-
         async def serve(process):
             self.assertEqual(process.command, "sudo -S -p '' -- cat -- /etc/test.conf")
             self.assertEqual(await process.stdin.read(), "fixture-password\n")
             process.stdout.write("server=/example.fr/9.9.9.9\n")
             process.exit(0)
 
-        async with await asyncssh.listen(
-            "127.0.0.1",
-            0,
-            server_factory=LocalSSHServer,
-            server_host_keys=[asyncssh.generate_private_key("ssh-ed25519")],
-            process_factory=serve,
-        ) as server:
+        async with await local_ssh_server(serve) as server:
             client = dnsmasq.DnsmasqSSH(
                 "127.0.0.1", server.get_port(), "fixture", "fixture-password",
                 conf_path="/etc/test.conf",
             )
             self.assertEqual(await client.get_domains(), ["example.fr"])
 
+    async def test_failed_remote_command_raises_process_error(self):
+        async def serve(process):
+            await process.stdin.read()
+            process.stderr.write("cat: /etc/test.conf: No such file\n")
+            process.exit(1)
+
+        async with await local_ssh_server(serve) as server:
+            client = dnsmasq.DnsmasqSSH(
+                "127.0.0.1", server.get_port(), "fixture", "fixture-password",
+                conf_path="/etc/test.conf",
+            )
+            self.assertEqual(await client.test_connection(), (False, "conf_not_found"))
+
     async def test_password_and_file_use_separate_stdin_streams(self):
-        conn = AsyncMock()
-        conn.__aenter__.return_value = conn
-        conn.run.return_value.stdout = "/tmp/staged\n"
-        client = ssh.SSHClient("host", 22, "user", "test' password")
-        client._connect = AsyncMock(return_value=conn)
+        commands = []
+
+        async def serve(process):
+            stdin = await process.stdin.read()
+            commands.append((process.command, stdin))
+            if process.command == "mktemp":
+                process.stdout.write("/tmp/staged\n")
+            process.exit(0)
+
         content = "# exact bytes\nserver=/example.fr/9.9.9.9\n"
+        async with await local_ssh_server(serve) as server:
+            client = ssh.SSHClient("127.0.0.1", server.get_port(), "user", "test' password")
+            await client.write_file("/etc/dnsmasq.d/file with spaces", content)
 
-        await client.write_file("/etc/dnsmasq.d/file with spaces", content)
-
-        stage = conn.run.await_args_list[1]
-        self.assertEqual(stage.kwargs["input"], content)
-        command = conn.run.await_args_list[2]
-        self.assertEqual(command.kwargs["input"], "test' password\n")
-        self.assertNotIn("test' password", command.args[0])
+        self.assertEqual(commands[1], ("cat > /tmp/staged", content))
+        install, password = commands[2]
+        self.assertEqual(password, "test' password\n")
+        self.assertNotIn("test' password", install)
         self.assertEqual(
-            shlex.split(command.args[0])[-2:], ["/tmp/staged", "/etc/dnsmasq.d/file with spaces"]
+            shlex.split(install)[-2:], ["/tmp/staged", "/etc/dnsmasq.d/file with spaces"]
         )
-        self.assertTrue(command.kwargs["check"])
+        self.assertEqual(commands[3], ("rm -f -- /tmp/staged", ""))
 
     async def test_failed_write_propagates_and_cleans_staging_file(self):
         conn = AsyncMock()
         conn.__aenter__.return_value = conn
-        conn.run.return_value.stdout = "/tmp/staged\n"
         client = ssh.SSHClient("host", 22, "user", "test password")
         client._connect = AsyncMock(return_value=conn)
+        client._run = AsyncMock(return_value="/tmp/staged\n")
         client._install_file = AsyncMock(side_effect=OSError("write failed"))
         with self.assertRaisesRegex(OSError, "write failed"):
             await client.write_file("/etc/file", "new contents")
-        self.assertEqual(conn.run.await_args.args, ("rm -f -- /tmp/staged",))
+        self.assertEqual(client._run.await_args.args, (conn, "rm -f -- /tmp/staged"))
 
     async def test_empty_dnsmasq_file_is_a_valid_configuration(self):
         client = dnsmasq.DnsmasqSSH("host", 22, "user", "test password")

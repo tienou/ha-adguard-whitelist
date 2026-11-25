@@ -24,6 +24,12 @@ jobs:
           python -m pip install "$(python -c 'import json; print(json.load(open("custom_components/adguard_whitelist/manifest.json"))["requirements"][0])')"
           python -m unittest discover -s tests -v
           python -m compileall -q custom_components/adguard_whitelist
+      - name: Tester SSH avec l'ancien asyncssh qu'un autre composant de HA peut charger
+        run: |
+          python -m venv "$RUNNER_TEMP/asyncssh-ancien"
+          source "$RUNNER_TEMP/asyncssh-ancien/bin/activate"
+          python -m pip install "asyncssh==2.17.0"
+          python -m unittest discover -s tests -v
       - name: Vérifier la carte Lovelace
         run: |
           node --check custom_components/adguard_whitelist/www/adguard-whitelist-card.js
